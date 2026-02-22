@@ -45,6 +45,17 @@ db.exec(`
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY(tenant_id) REFERENCES tenants(id)
   );
+
+  CREATE TABLE IF NOT EXISTS pending_payments (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    email TEXT NOT NULL,
+    plan TEXT NOT NULL,
+    expiry_days INTEGER NOT NULL,
+    amount REAL NOT NULL,
+    status TEXT DEFAULT 'pending',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
 `);
 
 // Function to check and generate subscription notifications
@@ -219,14 +230,35 @@ async function startServer() {
     });
   });
 
-  app.post("/api/admin/tenants", (req, res) => {
+  app.post("/api/admin/tenants/init-payment", (req, res) => {
     const { name, email, plan, expiry_days } = req.body;
+    const amount = plan === 'annual' ? 299 : plan === 'quarterly' ? 79 : 29;
+    const paymentId = `PAY-${Math.random().toString(36).substr(2, 9).toUpperCase()}`;
+    
+    db.prepare("INSERT INTO pending_payments (id, name, email, plan, expiry_days, amount) VALUES (?, ?, ?, ?, ?, ?)").run(
+      paymentId, name, email, plan, expiry_days, amount
+    );
+    
+    res.json({ paymentId, amount });
+  });
+
+  app.post("/api/admin/tenants/finalize", (req, res) => {
+    const { paymentId } = req.body;
+    const pending = db.prepare("SELECT * FROM pending_payments WHERE id = ? AND status = 'pending'").get(paymentId) as any;
+    
+    if (!pending) return res.status(404).json({ error: "Payment record not found or already processed" });
+    
     const expiryDate = new Date();
-    expiryDate.setDate(expiryDate.getDate() + (expiry_days || 30));
+    expiryDate.setDate(expiryDate.getDate() + pending.expiry_days);
     
     try {
-      const info = db.prepare("INSERT INTO tenants (name, email, plan, expiry_date) VALUES (?, ?, ?, ?)").run(name, email, plan || 'monthly', expiryDate.toISOString());
-      res.json({ id: info.lastInsertRowid });
+      db.transaction(() => {
+        db.prepare("UPDATE pending_payments SET status = 'completed' WHERE id = ?").run(paymentId);
+        db.prepare("INSERT INTO tenants (name, email, plan, expiry_date) VALUES (?, ?, ?, ?)").run(
+          pending.name, pending.email, pending.plan, expiryDate.toISOString()
+        );
+      })();
+      res.json({ success: true });
     } catch (e: any) {
       res.status(400).json({ error: e.message });
     }
