@@ -204,6 +204,50 @@ async function startServer() {
     res.json({ success: true });
   });
 
+  // Super Admin Routes
+  app.get("/api/admin/stats", (req, res) => {
+    const totalTenants = db.prepare("SELECT COUNT(*) as count FROM tenants").get() as { count: number };
+    const totalTransactions = db.prepare("SELECT COUNT(*) as count FROM transactions").get() as { count: number };
+    const totalRevenue = db.prepare("SELECT SUM(total) as total FROM transactions").get() as { total: number };
+    const activeTenants = db.prepare("SELECT COUNT(*) as count FROM tenants WHERE expiry_date > datetime('now')").get() as { count: number };
+    
+    res.json({
+      totalTenants: totalTenants.count,
+      totalTransactions: totalTransactions.count,
+      totalRevenue: totalRevenue.total || 0,
+      activeTenants: activeTenants.count
+    });
+  });
+
+  app.post("/api/admin/tenants", (req, res) => {
+    const { name, email, plan, expiry_days } = req.body;
+    const expiryDate = new Date();
+    expiryDate.setDate(expiryDate.getDate() + (expiry_days || 30));
+    
+    try {
+      const info = db.prepare("INSERT INTO tenants (name, email, plan, expiry_date) VALUES (?, ?, ?, ?)").run(name, email, plan || 'monthly', expiryDate.toISOString());
+      res.json({ id: info.lastInsertRowid });
+    } catch (e: any) {
+      res.status(400).json({ error: e.message });
+    }
+  });
+
+  app.delete("/api/admin/tenants/:id", (req, res) => {
+    const { id } = req.params;
+    db.prepare("DELETE FROM transactions WHERE tenant_id = ?").run(id);
+    db.prepare("DELETE FROM products WHERE tenant_id = ?").run(id);
+    db.prepare("DELETE FROM notifications WHERE tenant_id = ?").run(id);
+    db.prepare("DELETE FROM tenants WHERE id = ?").run(id);
+    res.json({ success: true });
+  });
+
+  app.patch("/api/admin/tenants/:id", (req, res) => {
+    const { id } = req.params;
+    const { name, email, plan, expiry_date } = req.body;
+    db.prepare("UPDATE tenants SET name = ?, email = ?, plan = ?, expiry_date = ? WHERE id = ?").run(name, email, plan, expiry_date, id);
+    res.json({ success: true });
+  });
+
   // Vite middleware for development
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({

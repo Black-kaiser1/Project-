@@ -41,3 +41,10 @@ export interface Notification {
   is_read: number;
   created_at: string;
 }
+
+export interface AdminStats {
+  totalTenants: number;
+  totalTransactions: number;
+  totalRevenue: number;
+  activeTenants: number;
+}
