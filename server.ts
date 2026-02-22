@@ -124,13 +124,18 @@ if (tenantCount.count === 0) {
   const date3 = new Date();
   date3.setDate(date3.getDate() - 1);
   insertTenant.run("Expired Store", "expired@lucid.com", "monthly", date3.toISOString());
-
-  // Seed users
-  const insertUser = db.prepare("INSERT INTO users (tenant_id, username, password, role) VALUES (?, ?, ?, ?)");
-  insertUser.run(null, "admin", "admin123", "super_admin");
-  insertUser.run(1, "coffee_admin", "coffee123", "tenant_admin");
-  insertUser.run(2, "bakery_admin", "bakery123", "tenant_admin");
 }
+
+// Seed users (ensure defaults exist)
+const insertUser = db.prepare("INSERT OR IGNORE INTO users (tenant_id, username, password, role) VALUES (?, ?, ?, ?)");
+insertUser.run(null, "admin", "admin123", "super_admin");
+
+const tenants = db.prepare("SELECT id, name FROM tenants").all() as any[];
+const coffee = tenants.find(t => t.name === "Lucid Coffee Shop");
+const bakery = tenants.find(t => t.name === "Lucid Bakery");
+
+if (coffee) insertUser.run(coffee.id, "coffee_admin", "coffee123", "tenant_admin");
+if (bakery) insertUser.run(bakery.id, "bakery_admin", "bakery123", "tenant_admin");
 
 async function startServer() {
   const app = express();

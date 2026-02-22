@@ -24,7 +24,8 @@ import {
   Users,
   TrendingUp,
   PlusCircle,
-  Trash
+  Trash,
+  Printer
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Product, CartItem, Transaction, DashboardStats, Tenant, Notification, AdminStats, User } from './types';
@@ -50,6 +51,7 @@ export default function App() {
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
+  const [lastTransaction, setLastTransaction] = useState<Transaction | null>(null);
   const [isRenewing, setIsRenewing] = useState(false);
 
   // Admin State
@@ -243,6 +245,77 @@ export default function App() {
     }
   };
 
+  const handlePrintReceipt = (transaction: Transaction) => {
+    if (!currentTenant) return;
+    
+    const printWindow = window.open('', '_blank', 'width=300,height=600');
+    if (!printWindow) return;
+
+    const itemsHtml = transaction.items.map(item => `
+      <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
+        <span>${item.name} x${item.quantity}</span>
+        <span>$${(item.price * item.quantity).toFixed(2)}</span>
+      </div>
+    `).join('');
+
+    const html = `
+      <html>
+        <head>
+          <title>Receipt #${transaction.id}</title>
+          <style>
+            body { 
+              font-family: 'Courier New', Courier, monospace; 
+              font-size: 12px; 
+              width: 280px; 
+              margin: 0 auto; 
+              padding: 20px;
+              color: #000;
+            }
+            .header { text-align: center; margin-bottom: 20px; border-bottom: 1px dashed #000; padding-bottom: 10px; }
+            .footer { text-align: center; margin-top: 20px; border-top: 1px dashed #000; padding-top: 10px; font-size: 10px; }
+            .total { font-weight: bold; font-size: 14px; margin-top: 10px; border-top: 1px solid #000; padding-top: 5px; display: flex; justify-content: space-between; }
+            .meta { margin-bottom: 10px; font-size: 10px; }
+            @media print {
+              @page { margin: 0; }
+              body { margin: 0.5cm; }
+            }
+          </style>
+        </head>
+        <body>
+          <div class="header">
+            <h2 style="margin: 0;">${currentTenant.name}</h2>
+            <p style="margin: 5px 0;">${currentTenant.email}</p>
+          </div>
+          <div class="meta">
+            <div>Order: #${transaction.id}</div>
+            <div>Date: ${new Date(transaction.timestamp).toLocaleString()}</div>
+            <div>Staff: ${currentUser?.username || 'System'}</div>
+          </div>
+          <div class="items">
+            ${itemsHtml}
+          </div>
+          <div class="total">
+            <span>TOTAL</span>
+            <span>$${transaction.total.toFixed(2)}</span>
+          </div>
+          <div class="footer">
+            <p>Thank you for your business!</p>
+            <p>Powered by Lucid Hub POS</p>
+          </div>
+          <script>
+            window.onload = () => {
+              window.print();
+              setTimeout(() => window.close(), 500);
+            };
+          </script>
+        </body>
+      </html>
+    `;
+
+    printWindow.document.write(html);
+    printWindow.document.close();
+  };
+
   const fetchProducts = async () => {
     if (!currentTenant) return;
     const res = await fetch(`/api/products?tenantId=${currentTenant.id}`);
@@ -358,13 +431,22 @@ export default function App() {
       });
 
       if (res.ok) {
+        const data = await res.json();
+        const newTransaction = {
+          id: data.id,
+          total: cartTotal,
+          items: [...cart],
+          timestamp: new Date().toISOString(),
+          tenant_id: currentTenant.id
+        };
+        setLastTransaction(newTransaction);
         setCart([]);
         setIsCartOpen(false);
         setShowSuccess(true);
         fetchProducts();
         fetchStats();
         fetchTransactions();
-        setTimeout(() => setShowSuccess(false), 3000);
+        setTimeout(() => setShowSuccess(false), 5000);
       } else {
         const err = await res.json();
         alert(err.error);
@@ -421,7 +503,11 @@ export default function App() {
           </motion.button>
         </form>
 
-        <p className="mt-12 text-center text-slate-600 text-[10px] uppercase tracking-widest font-bold">
+        <p className="mt-8 text-center text-slate-500 text-[9px] uppercase tracking-widest font-bold">
+          Demo: admin / admin123
+        </p>
+
+        <p className="mt-4 text-center text-slate-600 text-[10px] uppercase tracking-widest font-bold">
           Powered by Lucid IT Hub
         </p>
       </div>
@@ -879,7 +965,15 @@ export default function App() {
                     </div>
                     
                     <div className="bg-slate-50/50 rounded-xl p-3 border border-slate-50">
-                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2">Items Summary</p>
+                      <div className="flex justify-between items-center mb-2">
+                        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Items Summary</p>
+                        <button 
+                          onClick={() => handlePrintReceipt(t)}
+                          className="p-1.5 bg-white border border-slate-200 rounded-lg text-slate-400 hover:text-emerald-500 transition-colors"
+                        >
+                          <Printer size={14} />
+                        </button>
+                      </div>
                       <div className="space-y-2">
                         {t.items.map(item => (
                           <div key={item.id} className="flex justify-between items-center text-[11px]">
@@ -1244,6 +1338,15 @@ export default function App() {
                 <h3 className="text-xl font-black text-slate-900">Success!</h3>
                 <p className="text-xs text-slate-500 font-medium">Transaction has been recorded successfully.</p>
               </div>
+              {lastTransaction && (
+                <button 
+                  onClick={() => handlePrintReceipt(lastTransaction)}
+                  className="w-full flex items-center justify-center gap-2 bg-slate-900 text-white p-4 rounded-2xl font-bold text-sm shadow-lg shadow-slate-900/20"
+                >
+                  <Printer size={18} />
+                  Print Receipt
+                </button>
+              )}
             </div>
           </motion.div>
         )}
