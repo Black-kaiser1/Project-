@@ -34,6 +34,7 @@ export default function App() {
   const [view, setView] = useState<'login' | 'store' | 'admin'>('login');
   const [activeTab, setActiveTab] = useState<'dashboard' | 'pos' | 'history' | 'inventory' | 'users'>('pos');
   const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [loginData, setLoginData] = useState({ username: '', password: '' });
   const [tenants, setTenants] = useState<Tenant[]>([]);
   const [currentTenant, setCurrentTenant] = useState<Tenant | null>(null);
@@ -53,6 +54,7 @@ export default function App() {
   const [showSuccess, setShowSuccess] = useState(false);
   const [lastTransaction, setLastTransaction] = useState<Transaction | null>(null);
   const [isRenewing, setIsRenewing] = useState(false);
+  const [isPrinterModalOpen, setIsPrinterModalOpen] = useState(false);
 
   // Admin State
   const [adminStats, setAdminStats] = useState<AdminStats | null>(null);
@@ -86,6 +88,8 @@ export default function App() {
 
   const handleLogin = async (e: FormEvent) => {
     e.preventDefault();
+    setIsLoggingIn(true);
+    console.log('Attempting login...', loginData.username);
     try {
       const res = await fetch('/api/auth/login', {
         method: 'POST',
@@ -94,6 +98,7 @@ export default function App() {
       });
       if (res.ok) {
         const { user, tenant } = await res.json();
+        console.log('Login success:', user.username);
         setCurrentUser(user);
         if (user.role === 'super_admin') {
           setView('admin');
@@ -103,10 +108,14 @@ export default function App() {
           setView('store');
         }
       } else {
-        alert('Invalid credentials');
+        const errorData = await res.json().catch(() => ({ error: 'Unknown error' }));
+        alert(errorData.error || 'Invalid credentials');
       }
     } catch (error) {
       console.error('Login failed', error);
+      alert('Connection error. Please try again.');
+    } finally {
+      setIsLoggingIn(false);
     }
   };
 
@@ -497,9 +506,10 @@ export default function App() {
             whileHover={{ scale: 1.02 }}
             whileTap={{ scale: 0.98 }}
             type="submit"
-            className="w-full bg-emerald-500 text-white p-5 rounded-2xl font-black shadow-lg shadow-emerald-500/20 transition-all mt-4"
+            disabled={isLoggingIn}
+            className={`w-full bg-emerald-500 text-white p-5 rounded-2xl font-black shadow-lg shadow-emerald-500/20 transition-all mt-4 ${isLoggingIn ? 'opacity-50 cursor-not-allowed' : ''}`}
           >
-            Login to Store
+            {isLoggingIn ? 'Logging in...' : 'Login to Store'}
           </motion.button>
         </form>
 
@@ -814,6 +824,13 @@ export default function App() {
                 {cart.reduce((s, i) => s + i.quantity, 0)}
               </span>
             )}
+          </button>
+          <button 
+            onClick={() => setIsPrinterModalOpen(true)}
+            className="p-2 bg-slate-100 rounded-full hover:bg-slate-200 transition-colors"
+            title="Printer Setup"
+          >
+            <Printer size={18} className="text-slate-700" />
           </button>
           {currentUser?.role === 'super_admin' && (
             <button 
@@ -1349,6 +1366,67 @@ export default function App() {
               )}
             </div>
           </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Printer Setup Modal */}
+      <AnimatePresence>
+        {isPrinterModalOpen && (
+          <>
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setIsPrinterModalOpen(false)}
+              className="absolute inset-0 bg-slate-900/60 backdrop-blur-md z-[100]"
+            />
+            <motion.div 
+              initial={{ y: '100%' }}
+              animate={{ y: 0 }}
+              exit={{ y: '100%' }}
+              className="absolute bottom-0 left-0 right-0 bg-white rounded-t-[2.5rem] shadow-2xl z-[100] p-8 space-y-6"
+            >
+              <div className="text-center">
+                <div className="w-16 h-16 bg-slate-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
+                  <Printer size={32} className="text-slate-900" />
+                </div>
+                <h2 className="text-2xl font-black text-slate-900">Printer Setup</h2>
+                <p className="text-slate-500 text-sm">Connect your thermal or standard printer</p>
+              </div>
+
+              <div className="space-y-4">
+                <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100">
+                  <h3 className="text-xs font-black text-slate-900 uppercase tracking-widest mb-2">Option 1: System Print</h3>
+                  <p className="text-[11px] text-slate-600 leading-relaxed">
+                    Our receipts are optimized for 58mm and 80mm thermal printers. When you click "Print Receipt", the system print dialog will open. Select your thermal printer and set the paper size to "Roll Paper" or "58mm/80mm".
+                  </p>
+                </div>
+
+                <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100">
+                  <h3 className="text-xs font-black text-slate-900 uppercase tracking-widest mb-2">Option 2: Direct Connection</h3>
+                  <p className="text-[11px] text-slate-600 leading-relaxed">
+                    For direct USB/Bluetooth thermal printing, ensure your printer drivers are installed. Most modern thermal printers (Epson, Star, etc.) work automatically with the system print dialog.
+                  </p>
+                </div>
+
+                <div className="bg-emerald-50 p-4 rounded-2xl border border-emerald-100">
+                  <div className="flex gap-3">
+                    <Info size={18} className="text-emerald-500 shrink-0" />
+                    <p className="text-[11px] text-emerald-700 font-medium">
+                      Tip: Disable "Headers and Footers" in the print settings for a cleaner look on thermal paper.
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              <button 
+                onClick={() => setIsPrinterModalOpen(false)}
+                className="w-full bg-slate-900 text-white py-4 rounded-2xl font-black shadow-xl active:scale-95 transition-all"
+              >
+                Got it
+              </button>
+            </motion.div>
+          </>
         )}
       </AnimatePresence>
 

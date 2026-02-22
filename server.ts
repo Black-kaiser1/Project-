@@ -127,15 +127,18 @@ if (tenantCount.count === 0) {
 }
 
 // Seed users (ensure defaults exist)
-const insertUser = db.prepare("INSERT OR IGNORE INTO users (tenant_id, username, password, role) VALUES (?, ?, ?, ?)");
-insertUser.run(null, "admin", "admin123", "super_admin");
+db.prepare("INSERT OR REPLACE INTO users (tenant_id, username, password, role) VALUES (null, 'admin', 'admin123', 'super_admin')").run();
 
 const tenants = db.prepare("SELECT id, name FROM tenants").all() as any[];
 const coffee = tenants.find(t => t.name === "Lucid Coffee Shop");
 const bakery = tenants.find(t => t.name === "Lucid Bakery");
 
-if (coffee) insertUser.run(coffee.id, "coffee_admin", "coffee123", "tenant_admin");
-if (bakery) insertUser.run(bakery.id, "bakery_admin", "bakery123", "tenant_admin");
+if (coffee) db.prepare("INSERT OR IGNORE INTO users (tenant_id, username, password, role) VALUES (?, ?, ?, ?)").run(coffee.id, "coffee_admin", "coffee123", "tenant_admin");
+if (bakery) db.prepare("INSERT OR IGNORE INTO users (tenant_id, username, password, role) VALUES (?, ?, ?, ?)").run(bakery.id, "bakery_admin", "bakery123", "tenant_admin");
+
+console.log("Database seeded with default users.");
+const allUsers = db.prepare("SELECT username, role FROM users").all();
+console.log("Current users in DB:", allUsers);
 
 async function startServer() {
   const app = express();
@@ -143,15 +146,24 @@ async function startServer() {
 
   app.use(express.json());
 
+  // Health check
+  app.get("/api/health", (req, res) => {
+    res.json({ status: "ok", timestamp: new Date().toISOString() });
+  });
+
   // Auth Routes
   app.post("/api/auth/login", (req, res) => {
     const { username, password } = req.body;
+    console.log(`Login attempt for: ${username}`);
+    
     const user = db.prepare("SELECT * FROM users WHERE username = ? AND password = ?").get(username, password) as any;
     
     if (!user) {
+      console.log(`Login failed for: ${username}`);
       return res.status(401).json({ error: "Invalid credentials" });
     }
     
+    console.log(`Login successful for: ${username} (Role: ${user.role})`);
     let tenant = null;
     if (user.tenant_id) {
       tenant = db.prepare("SELECT * FROM tenants WHERE id = ?").get(user.tenant_id);
@@ -365,6 +377,12 @@ async function startServer() {
     const { name, email, plan, expiry_date } = req.body;
     db.prepare("UPDATE tenants SET name = ?, email = ?, plan = ?, expiry_date = ? WHERE id = ?").run(name, email, plan, expiry_date, id);
     res.json({ success: true });
+  });
+
+  // Global Error Handler
+  app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+    console.error('Unhandled Error:', err);
+    res.status(500).json({ error: "Internal Server Error", message: err.message });
   });
 
   // Vite middleware for development
