@@ -125,14 +125,6 @@ if (tenantCount.count === 0) {
   date3.setDate(date3.getDate() - 1);
   insertTenant.run("Expired Store", "expired@lucid.com", "monthly", date3.toISOString());
 
-  // Seed products for the first two tenants
-  const insertProduct = db.prepare("INSERT INTO products (tenant_id, name, price, category, stock, image) VALUES (?, ?, ?, ?, ?, ?)");
-  [1, 2].forEach(tid => {
-    insertProduct.run(tid, "Coffee Latte", 4.50, "Beverages", 50, "https://picsum.photos/seed/latte/200/200");
-    insertProduct.run(tid, "Cappuccino", 4.00, "Beverages", 40, "https://picsum.photos/seed/cappuccino/200/200");
-    insertProduct.run(tid, "Croissant", 3.25, "Bakery", 30, "https://picsum.photos/seed/croissant/200/200");
-  });
-
   // Seed users
   const insertUser = db.prepare("INSERT INTO users (tenant_id, username, password, role) VALUES (?, ?, ?, ?)");
   insertUser.run(null, "admin", "admin123", "super_admin");
@@ -214,6 +206,29 @@ async function startServer() {
     if (!tenantId) return res.status(400).json({ error: "Missing tenantId" });
     const products = db.prepare("SELECT * FROM products WHERE tenant_id = ?").all(tenantId);
     res.json(products);
+  });
+
+  app.post("/api/products", (req, res) => {
+    const { tenant_id, name, price, category, stock, image } = req.body;
+    const info = db.prepare("INSERT INTO products (tenant_id, name, price, category, stock, image) VALUES (?, ?, ?, ?, ?, ?)").run(
+      tenant_id, name, price, category, stock, image || `https://picsum.photos/seed/${name}/200/200`
+    );
+    res.json({ id: info.lastInsertRowid });
+  });
+
+  app.patch("/api/products/:id", (req, res) => {
+    const { id } = req.params;
+    const { name, price, category, stock, image } = req.body;
+    db.prepare("UPDATE products SET name = ?, price = ?, category = ?, stock = ?, image = ? WHERE id = ?").run(
+      name, price, category, stock, image, id
+    );
+    res.json({ success: true });
+  });
+
+  app.delete("/api/products/:id", (req, res) => {
+    const { id } = req.params;
+    db.prepare("DELETE FROM products WHERE id = ?").run(id);
+    res.json({ success: true });
   });
 
   app.post("/api/transactions", (req, res) => {

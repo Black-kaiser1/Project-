@@ -40,6 +40,8 @@ export default function App() {
   const [users, setUsers] = useState<User[]>([]);
   const [isUserModalOpen, setIsUserModalOpen] = useState(false);
   const [editingUser, setEditingUser] = useState<Partial<User & { password?: string }> | null>(null);
+  const [isProductModalOpen, setIsProductModalOpen] = useState(false);
+  const [editingProduct, setEditingProduct] = useState<Partial<Product> | null>(null);
   const [cart, setCart] = useState<CartItem[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [isCartOpen, setIsCartOpen] = useState(false);
@@ -148,6 +150,34 @@ export default function App() {
     const res = await fetch(`/api/users/${id}`, { method: 'DELETE' });
     if (res.ok) {
       fetchUsers();
+    }
+  };
+
+  const handleSaveProduct = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!editingProduct || !currentTenant) return;
+
+    const method = editingProduct.id ? 'PATCH' : 'POST';
+    const url = editingProduct.id ? `/api/products/${editingProduct.id}` : '/api/products';
+    
+    const res = await fetch(url, {
+      method,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...editingProduct, tenant_id: currentTenant.id })
+    });
+
+    if (res.ok) {
+      fetchProducts();
+      setIsProductModalOpen(false);
+      setEditingProduct(null);
+    }
+  };
+
+  const handleDeleteProduct = async (id: number) => {
+    if (!confirm('Are you sure you want to delete this product?')) return;
+    const res = await fetch(`/api/products/${id}`, { method: 'DELETE' });
+    if (res.ok) {
+      fetchProducts();
     }
   };
 
@@ -871,28 +901,66 @@ export default function App() {
 
             {activeTab === 'inventory' && (
               <div className="space-y-4">
-                <h2 className="text-lg font-black text-slate-900 mb-4">Inventory</h2>
+                <div className="flex justify-between items-center mb-4">
+                  <h2 className="text-lg font-black text-slate-900">Inventory</h2>
+                  <button 
+                    onClick={() => {
+                      setEditingProduct({ name: '', price: 0, category: '', stock: 0 });
+                      setIsProductModalOpen(true);
+                    }}
+                    className="p-2 bg-emerald-500 text-white rounded-xl shadow-lg shadow-emerald-500/20"
+                  >
+                    <Plus size={20} />
+                  </button>
+                </div>
                 <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
                   <table className="w-full text-xs">
                     <thead className="bg-slate-50 text-slate-500 text-left">
                       <tr>
                         <th className="px-4 py-3 font-bold uppercase tracking-wider">Product</th>
                         <th className="px-4 py-3 font-bold uppercase tracking-wider">Stock</th>
-                        <th className="px-4 py-3 font-bold uppercase tracking-wider">Price</th>
+                        <th className="px-4 py-3 font-bold uppercase tracking-wider text-right">Actions</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-50">
-                      {products.map(p => (
-                        <tr key={p.id}>
-                          <td className="px-4 py-3 font-bold text-slate-800">{p.name}</td>
-                          <td className="px-4 py-3">
-                            <span className={`px-2 py-0.5 rounded-full text-[9px] font-black ${p.stock < 10 ? 'bg-red-100 text-red-600' : 'bg-emerald-100 text-emerald-600'}`}>
-                              {p.stock} UNITS
-                            </span>
-                          </td>
-                          <td className="px-4 py-3 font-mono font-bold text-slate-600">${p.price.toFixed(2)}</td>
+                      {products.length === 0 ? (
+                        <tr>
+                          <td colSpan={3} className="px-4 py-8 text-center text-slate-400 font-bold">No products in inventory</td>
                         </tr>
-                      ))}
+                      ) : (
+                        products.map(p => (
+                          <tr key={p.id}>
+                            <td className="px-4 py-3">
+                              <p className="font-bold text-slate-800">{p.name}</p>
+                              <p className="text-[9px] text-slate-400 font-bold uppercase tracking-tighter">${p.price.toFixed(2)}</p>
+                            </td>
+                            <td className="px-4 py-3">
+                              <span className={`px-2 py-0.5 rounded-full text-[9px] font-black ${p.stock < 10 ? 'bg-red-100 text-red-600' : 'bg-emerald-100 text-emerald-600'}`}>
+                                {p.stock} UNITS
+                              </span>
+                            </td>
+                            <td className="px-4 py-3 text-right">
+                              <div className="flex justify-end gap-2">
+                                <button 
+                                  onClick={() => {
+                                    setEditingProduct(p);
+                                    setIsProductModalOpen(true);
+                                  }}
+                                  className="p-1.5 text-slate-400 hover:text-emerald-500 transition-colors"
+                                >
+                                  <Settings size={16} />
+                                </button>
+                                <button 
+                                  onClick={() => handleDeleteProduct(p.id)}
+                                  className="p-1.5 text-slate-400 hover:text-red-500 transition-colors"
+                                >
+                                  <Trash size={16} />
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        ))
+                      )}
                     </tbody>
                   </table>
                 </div>
@@ -1250,6 +1318,92 @@ export default function App() {
                     className="flex-1 bg-emerald-500 text-white py-4 rounded-2xl font-black shadow-lg shadow-emerald-500/20"
                   >
                     Save User
+                  </button>
+                </div>
+              </form>
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
+      {/* Product Management Modal */}
+      <AnimatePresence>
+        {isProductModalOpen && (
+          <>
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setIsProductModalOpen(false)}
+              className="absolute inset-0 bg-slate-900/60 backdrop-blur-md z-[100]"
+            />
+            <motion.div 
+              initial={{ y: '100%' }}
+              animate={{ y: 0 }}
+              exit={{ y: '100%' }}
+              className="absolute bottom-0 left-0 right-0 bg-white rounded-t-[2.5rem] shadow-2xl z-[100] p-8 space-y-6"
+            >
+              <div className="text-center">
+                <h2 className="text-2xl font-black text-slate-900">{editingProduct?.id ? 'Edit Product' : 'Add Product'}</h2>
+                <p className="text-slate-500 text-sm">Manage your store inventory</p>
+              </div>
+
+              <form onSubmit={handleSaveProduct} className="space-y-4">
+                <div>
+                  <label className="text-slate-400 text-[10px] font-bold uppercase tracking-widest mb-2 block">Product Name</label>
+                  <input 
+                    type="text"
+                    required
+                    className="w-full bg-slate-50 border border-slate-200 p-4 rounded-2xl text-slate-900 focus:outline-none focus:border-emerald-500 transition-all"
+                    value={editingProduct?.name || ''}
+                    onChange={(e) => setEditingProduct({...editingProduct, name: e.target.value})}
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="text-slate-400 text-[10px] font-bold uppercase tracking-widest mb-2 block">Price ($)</label>
+                    <input 
+                      type="number"
+                      step="0.01"
+                      required
+                      className="w-full bg-slate-50 border border-slate-200 p-4 rounded-2xl text-slate-900 focus:outline-none focus:border-emerald-500 transition-all"
+                      value={editingProduct?.price || ''}
+                      onChange={(e) => setEditingProduct({...editingProduct, price: parseFloat(e.target.value)})}
+                    />
+                  </div>
+                  <div>
+                    <label className="text-slate-400 text-[10px] font-bold uppercase tracking-widest mb-2 block">Stock</label>
+                    <input 
+                      type="number"
+                      required
+                      className="w-full bg-slate-50 border border-slate-200 p-4 rounded-2xl text-slate-900 focus:outline-none focus:border-emerald-500 transition-all"
+                      value={editingProduct?.stock || ''}
+                      onChange={(e) => setEditingProduct({...editingProduct, stock: parseInt(e.target.value)})}
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="text-slate-400 text-[10px] font-bold uppercase tracking-widest mb-2 block">Category</label>
+                  <input 
+                    type="text"
+                    required
+                    className="w-full bg-slate-50 border border-slate-200 p-4 rounded-2xl text-slate-900 focus:outline-none focus:border-emerald-500 transition-all"
+                    value={editingProduct?.category || ''}
+                    onChange={(e) => setEditingProduct({...editingProduct, category: e.target.value})}
+                  />
+                </div>
+                <div className="flex gap-3 pt-4">
+                  <button 
+                    type="button"
+                    onClick={() => setIsProductModalOpen(false)}
+                    className="flex-1 py-4 text-slate-400 font-bold text-sm"
+                  >
+                    Cancel
+                  </button>
+                  <button 
+                    type="submit"
+                    className="flex-1 bg-emerald-500 text-white py-4 rounded-2xl font-black shadow-lg shadow-emerald-500/20"
+                  >
+                    Save Product
                   </button>
                 </div>
               </form>
