@@ -1,5 +1,15 @@
+export interface Tenant {
+  id: number;
+  name: string;
+  email: string;
+  plan: 'monthly' | 'quarterly' | 'annual';
+  expiry_date: string;
+  status: string;
+}
+
 export interface Product {
   id: number;
+  tenant_id: number;
   name: string;
   price: number;
   category: string;
