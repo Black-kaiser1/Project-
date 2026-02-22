@@ -35,7 +35,55 @@ db.exec(`
     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY(tenant_id) REFERENCES tenants(id)
   );
+
+  CREATE TABLE IF NOT EXISTS notifications (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    message TEXT NOT NULL,
+    type TEXT DEFAULT 'info',
+    is_read INTEGER DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(tenant_id) REFERENCES tenants(id)
+  );
 `);
+
+// Function to check and generate subscription notifications
+function checkSubscriptions() {
+  const tenants = db.prepare("SELECT id, name, expiry_date FROM tenants").all() as any[];
+  const now = new Date();
+  
+  tenants.forEach(tenant => {
+    const expiry = new Date(tenant.expiry_date);
+    const diffDays = Math.ceil((expiry.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+    
+    if (diffDays === 7 || diffDays === 3 || diffDays <= 0) {
+      let message = "";
+      let type = "warning";
+      
+      if (diffDays === 7) message = "Your subscription expires in 7 days. Please renew to avoid service interruption.";
+      else if (diffDays === 3) {
+        message = "Urgent: Your subscription expires in 3 days!";
+        type = "critical";
+      }
+      else if (diffDays <= 0) {
+        message = "Your subscription has expired. Account is now locked.";
+        type = "error";
+      }
+
+      // Check if notification already exists for today to avoid duplicates
+      const exists = db.prepare("SELECT id FROM notifications WHERE tenant_id = ? AND message = ? AND date(created_at) = date('now')").get(tenant.id, message);
+      
+      if (!exists) {
+        db.prepare("INSERT INTO notifications (tenant_id, message, type) VALUES (?, ?, ?)").run(tenant.id, message, type);
+      }
+    }
+  });
+}
+
+// Run check on start
+checkSubscriptions();
+// Run check every hour
+setInterval(checkSubscriptions, 3600000);
 
 // Seed tenants if empty
 const tenantCount = db.prepare("SELECT COUNT(*) as count FROM tenants").get() as { count: number };
@@ -136,7 +184,24 @@ async function startServer() {
     newExpiry.setDate(newExpiry.getDate() + days);
     
     db.prepare("UPDATE tenants SET plan = ?, expiry_date = ?, status = 'active' WHERE id = ?").run(plan, newExpiry.toISOString(), tenantId);
+    
+    // Add success notification
+    db.prepare("INSERT INTO notifications (tenant_id, message, type) VALUES (?, ?, ?)").run(tenantId, `Subscription successfully renewed for ${plan} plan.`, 'success');
+    
     res.json({ success: true, expiry_date: newExpiry.toISOString() });
+  });
+
+  app.get("/api/notifications", (req, res) => {
+    const tenantId = req.query.tenantId;
+    if (!tenantId) return res.status(400).json({ error: "Missing tenantId" });
+    const notifications = db.prepare("SELECT * FROM notifications WHERE tenant_id = ? ORDER BY created_at DESC LIMIT 20").all(tenantId);
+    res.json(notifications);
+  });
+
+  app.post("/api/notifications/read", (req, res) => {
+    const { tenantId } = req.body;
+    db.prepare("UPDATE notifications SET is_read = 1 WHERE tenant_id = ?").run(tenantId);
+    res.json({ success: true });
   });
 
   // Vite middleware for development

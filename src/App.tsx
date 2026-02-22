@@ -16,10 +16,12 @@ import {
   AlertTriangle,
   Lock,
   Calendar,
-  LogOut
+  LogOut,
+  Bell,
+  Info
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Product, CartItem, Transaction, DashboardStats, Tenant } from './types';
+import { Product, CartItem, Transaction, DashboardStats, Tenant, Notification } from './types';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<'dashboard' | 'pos' | 'history' | 'inventory'>('pos');
@@ -31,6 +33,8 @@ export default function App() {
   const [isCartOpen, setIsCartOpen] = useState(false);
   const [stats, setStats] = useState<DashboardStats>({ dailyTotal: 0, transactionCount: 0 });
   const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [notifications, setNotifications] = useState<Notification[]>([]);
+  const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
   const [isRenewing, setIsRenewing] = useState(false);
 
@@ -43,6 +47,7 @@ export default function App() {
       fetchProducts();
       fetchStats();
       fetchTransactions();
+      fetchNotifications();
     }
   }, [currentTenant]);
 
@@ -73,6 +78,23 @@ export default function App() {
     setTransactions(data);
   };
 
+  const fetchNotifications = async () => {
+    if (!currentTenant) return;
+    const res = await fetch(`/api/notifications?tenantId=${currentTenant.id}`);
+    const data = await res.json();
+    setNotifications(data);
+  };
+
+  const markNotificationsRead = async () => {
+    if (!currentTenant) return;
+    await fetch('/api/notifications/read', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tenantId: currentTenant.id })
+    });
+    fetchNotifications();
+  };
+
   const handleRenew = async (plan: string) => {
     if (!currentTenant) return;
     const res = await fetch('/api/renew', {
@@ -85,6 +107,7 @@ export default function App() {
       setCurrentTenant({ ...currentTenant, expiry_date: data.expiry_date, plan: plan as any });
       setIsRenewing(false);
       fetchTenants();
+      fetchNotifications();
     }
   };
 
@@ -243,6 +266,18 @@ export default function App() {
           </div>
         </div>
         <div className="flex items-center gap-2">
+          <button 
+            onClick={() => {
+              setIsNotificationsOpen(true);
+              markNotificationsRead();
+            }}
+            className="relative p-2 bg-slate-100 rounded-full hover:bg-slate-200 transition-colors"
+          >
+            <Bell size={18} className="text-slate-700" />
+            {notifications.some(n => !n.is_read) && (
+              <span className="absolute top-1 right-1 bg-red-500 w-2.5 h-2.5 rounded-full border-2 border-white"></span>
+            )}
+          </button>
           <button 
             onClick={() => setIsCartOpen(true)}
             className="relative p-2 bg-slate-100 rounded-full hover:bg-slate-200 transition-colors"
@@ -434,6 +469,69 @@ export default function App() {
         <NavButton active={activeTab === 'history'} onClick={() => setActiveTab('history')} icon={<History size={20} />} label="History" />
         <NavButton active={activeTab === 'inventory'} onClick={() => setActiveTab('inventory')} icon={<Package size={20} />} label="Stock" />
       </nav>
+
+      {/* Notifications Modal */}
+      <AnimatePresence>
+        {isNotificationsOpen && (
+          <>
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setIsNotificationsOpen(false)}
+              className="absolute inset-0 bg-slate-900/60 backdrop-blur-md z-[80]"
+            />
+            <motion.div 
+              initial={{ x: '100%' }}
+              animate={{ x: 0 }}
+              exit={{ x: '100%' }}
+              className="absolute top-0 right-0 bottom-0 w-4/5 bg-white shadow-2xl z-[80] flex flex-col"
+            >
+              <div className="p-6 flex justify-between items-center border-b border-slate-100">
+                <h2 className="text-lg font-black text-slate-900">Notifications</h2>
+                <button onClick={() => setIsNotificationsOpen(false)} className="p-2 bg-slate-100 rounded-full">
+                  <X size={18} className="text-slate-500" />
+                </button>
+              </div>
+
+              <div className="flex-1 overflow-y-auto p-4 space-y-3 no-scrollbar">
+                {notifications.length === 0 ? (
+                  <div className="h-full flex flex-col items-center justify-center text-center p-8 opacity-40">
+                    <Bell size={48} className="mb-4" />
+                    <p className="text-sm font-bold">No notifications yet</p>
+                  </div>
+                ) : (
+                  notifications.map(n => (
+                    <div key={n.id} className={`p-4 rounded-2xl border ${
+                      n.type === 'critical' || n.type === 'error' ? 'bg-red-50 border-red-100' : 
+                      n.type === 'warning' ? 'bg-amber-50 border-amber-100' :
+                      n.type === 'success' ? 'bg-emerald-50 border-emerald-100' :
+                      'bg-slate-50 border-slate-100'
+                    }`}>
+                      <div className="flex gap-3">
+                        <div className={`shrink-0 w-8 h-8 rounded-full flex items-center justify-center ${
+                          n.type === 'critical' || n.type === 'error' ? 'text-red-500' : 
+                          n.type === 'warning' ? 'text-amber-500' :
+                          n.type === 'success' ? 'text-emerald-500' :
+                          'text-slate-500'
+                        }`}>
+                          {n.type === 'critical' || n.type === 'error' ? <AlertTriangle size={18} /> : 
+                           n.type === 'success' ? <CheckCircle2 size={18} /> :
+                           <Info size={18} />}
+                        </div>
+                        <div className="flex-1">
+                          <p className="text-xs font-bold text-slate-800 leading-tight">{n.message}</p>
+                          <p className="text-[9px] text-slate-400 mt-1 font-bold">{new Date(n.created_at).toLocaleString()}</p>
+                        </div>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
 
       {/* Renew Modal */}
       <AnimatePresence>

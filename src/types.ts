@@ -32,3 +32,12 @@ export interface DashboardStats {
   dailyTotal: number;
   transactionCount: number;
 }
+
+export interface Notification {
+  id: number;
+  tenant_id: number;
+  message: string;
+  type: 'info' | 'warning' | 'critical' | 'error' | 'success';
+  is_read: number;
+  created_at: string;
+}
