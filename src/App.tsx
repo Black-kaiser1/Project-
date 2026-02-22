@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, ReactNode } from 'react';
+import { useState, useEffect, useMemo, ReactNode, FormEvent } from 'react';
 import { 
   LayoutDashboard, 
   ShoppingCart, 
@@ -27,14 +27,19 @@ import {
   Trash
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Product, CartItem, Transaction, DashboardStats, Tenant, Notification, AdminStats } from './types';
+import { Product, CartItem, Transaction, DashboardStats, Tenant, Notification, AdminStats, User } from './types';
 
 export default function App() {
-  const [view, setView] = useState<'portal' | 'store' | 'admin'>('portal');
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'pos' | 'history' | 'inventory'>('pos');
+  const [view, setView] = useState<'login' | 'store' | 'admin'>('login');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'pos' | 'history' | 'inventory' | 'users'>('pos');
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [loginData, setLoginData] = useState({ username: '', password: '' });
   const [tenants, setTenants] = useState<Tenant[]>([]);
   const [currentTenant, setCurrentTenant] = useState<Tenant | null>(null);
   const [products, setProducts] = useState<Product[]>([]);
+  const [users, setUsers] = useState<User[]>([]);
+  const [isUserModalOpen, setIsUserModalOpen] = useState(false);
+  const [editingUser, setEditingUser] = useState<Partial<User & { password?: string }> | null>(null);
   const [cart, setCart] = useState<CartItem[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [isCartOpen, setIsCartOpen] = useState(false);
@@ -63,6 +68,9 @@ export default function App() {
       fetchStats();
       fetchTransactions();
       fetchNotifications();
+      if (currentUser?.role === 'tenant_admin') {
+        fetchUsers();
+      }
     }
   }, [currentTenant]);
 
@@ -71,6 +79,77 @@ export default function App() {
       fetchAdminStats();
     }
   }, [view]);
+
+  const handleLogin = async (e: FormEvent) => {
+    e.preventDefault();
+    try {
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(loginData)
+      });
+      if (res.ok) {
+        const { user, tenant } = await res.json();
+        setCurrentUser(user);
+        if (user.role === 'super_admin') {
+          setView('admin');
+          fetchTenants();
+        } else {
+          setCurrentTenant(tenant);
+          setView('store');
+        }
+      } else {
+        alert('Invalid credentials');
+      }
+    } catch (error) {
+      console.error('Login failed', error);
+    }
+  };
+
+  const handleLogout = () => {
+    setCurrentUser(null);
+    setCurrentTenant(null);
+    setView('login');
+    setLoginData({ username: '', password: '' });
+  };
+
+  const fetchUsers = async () => {
+    if (!currentTenant) return;
+    const res = await fetch(`/api/users?tenantId=${currentTenant.id}`);
+    const data = await res.json();
+    setUsers(data);
+  };
+
+  const handleSaveUser = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!editingUser || !currentTenant) return;
+
+    const method = editingUser.id ? 'PATCH' : 'POST';
+    const url = editingUser.id ? `/api/users/${editingUser.id}` : '/api/users';
+    
+    const res = await fetch(url, {
+      method,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...editingUser, tenant_id: currentTenant.id })
+    });
+
+    if (res.ok) {
+      fetchUsers();
+      setIsUserModalOpen(false);
+      setEditingUser(null);
+    } else {
+      const err = await res.json();
+      alert(err.error);
+    }
+  };
+
+  const handleDeleteUser = async (id: number) => {
+    if (!confirm('Are you sure you want to delete this user?')) return;
+    const res = await fetch(`/api/users/${id}`, { method: 'DELETE' });
+    if (res.ok) {
+      fetchUsers();
+    }
+  };
 
   const fetchTenants = async () => {
     const res = await fetch('/api/tenants');
@@ -270,16 +349,9 @@ export default function App() {
     p.category.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
-  if (view === 'portal') {
+  if (view === 'login') {
     return (
-      <div className="flex flex-col h-screen max-w-md mx-auto bg-slate-900 overflow-hidden shadow-2xl p-8 justify-center relative">
-        <button 
-          onClick={() => setView('admin')}
-          className="absolute top-8 right-8 p-3 bg-slate-800 rounded-2xl text-slate-400 hover:text-emerald-400 transition-colors border border-slate-700"
-        >
-          <ShieldCheck size={24} />
-        </button>
-
+      <div className="flex flex-col h-screen max-w-md mx-auto bg-slate-900 overflow-hidden shadow-2xl p-8 justify-center">
         <div className="text-center mb-12">
           <div className="w-20 h-20 bg-emerald-500 rounded-3xl flex items-center justify-center mx-auto mb-6 shadow-xl shadow-emerald-500/20 rotate-3">
             <Store size={40} className="text-white" />
@@ -288,34 +360,36 @@ export default function App() {
           <p className="text-emerald-400 font-bold uppercase tracking-widest text-xs">SaaS Multi-Tenant Portal</p>
         </div>
 
-        <div className="space-y-4 overflow-y-auto no-scrollbar max-h-[50vh]">
-          <p className="text-slate-400 text-sm font-medium mb-2">Select your store to continue:</p>
-          {tenants.map(tenant => (
-            <motion.button
-              whileHover={{ scale: 1.02 }}
-              whileTap={{ scale: 0.98 }}
-              key={tenant.id}
-              onClick={() => {
-                setCurrentTenant(tenant);
-                setView('store');
-              }}
-              className="w-full bg-slate-800 border border-slate-700 p-5 rounded-2xl flex justify-between items-center group hover:border-emerald-500/50 transition-all"
-            >
-              <div className="text-left">
-                <h3 className="text-white font-bold group-hover:text-emerald-400 transition-colors">{tenant.name}</h3>
-                <p className="text-slate-500 text-xs">{tenant.email}</p>
-              </div>
-              <div className="flex flex-col items-end">
-                <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full mb-1 ${
-                  new Date(tenant.expiry_date) < new Date() ? 'bg-red-500/20 text-red-400' : 'bg-emerald-500/20 text-emerald-400'
-                }`}>
-                  {new Date(tenant.expiry_date) < new Date() ? 'Expired' : 'Active'}
-                </span>
-                <ChevronRight size={18} className="text-slate-600 group-hover:text-emerald-500 transition-colors" />
-              </div>
-            </motion.button>
-          ))}
-        </div>
+        <form onSubmit={handleLogin} className="space-y-4">
+          <div>
+            <label className="text-slate-400 text-[10px] font-bold uppercase tracking-widest mb-2 block">Username</label>
+            <input 
+              type="text"
+              required
+              className="w-full bg-slate-800 border border-slate-700 p-4 rounded-2xl text-white focus:outline-none focus:border-emerald-500 transition-all"
+              value={loginData.username}
+              onChange={(e) => setLoginData({...loginData, username: e.target.value})}
+            />
+          </div>
+          <div>
+            <label className="text-slate-400 text-[10px] font-bold uppercase tracking-widest mb-2 block">Password</label>
+            <input 
+              type="password"
+              required
+              className="w-full bg-slate-800 border border-slate-700 p-4 rounded-2xl text-white focus:outline-none focus:border-emerald-500 transition-all"
+              value={loginData.password}
+              onChange={(e) => setLoginData({...loginData, password: e.target.value})}
+            />
+          </div>
+          <motion.button
+            whileHover={{ scale: 1.02 }}
+            whileTap={{ scale: 0.98 }}
+            type="submit"
+            className="w-full bg-emerald-500 text-white p-5 rounded-2xl font-black shadow-lg shadow-emerald-500/20 transition-all mt-4"
+          >
+            Login to Store
+          </motion.button>
+        </form>
 
         <p className="mt-12 text-center text-slate-600 text-[10px] uppercase tracking-widest font-bold">
           Powered by Lucid IT Hub
@@ -333,7 +407,7 @@ export default function App() {
             <p className="text-[10px] uppercase tracking-widest font-bold text-emerald-400">System Management</p>
           </div>
           <button 
-            onClick={() => setView('portal')}
+            onClick={handleLogout}
             className="p-2 bg-slate-800 rounded-xl text-slate-400 hover:text-white transition-colors"
           >
             <LogOut size={20} />
@@ -625,11 +699,16 @@ export default function App() {
               </span>
             )}
           </button>
+          {currentUser?.role === 'super_admin' && (
+            <button 
+              onClick={() => setView('admin')}
+              className="p-2 bg-slate-100 rounded-full hover:bg-emerald-50 text-slate-400 hover:text-emerald-500 transition-colors"
+            >
+              <ShieldCheck size={18} />
+            </button>
+          )}
           <button 
-            onClick={() => {
-              setCurrentTenant(null);
-              setView('portal');
-            }}
+            onClick={handleLogout}
             className="p-2 bg-slate-100 rounded-full hover:bg-red-50 text-slate-400 hover:text-red-500 transition-colors"
           >
             <LogOut size={18} />
@@ -797,6 +876,51 @@ export default function App() {
                 </div>
               </div>
             )}
+
+            {activeTab === 'users' && currentUser?.role === 'tenant_admin' && (
+              <div className="space-y-4">
+                <div className="flex justify-between items-center mb-4">
+                  <h2 className="text-lg font-black text-slate-900">User Management</h2>
+                  <button 
+                    onClick={() => {
+                      setEditingUser({ role: 'staff' });
+                      setIsUserModalOpen(true);
+                    }}
+                    className="p-2 bg-emerald-500 text-white rounded-xl shadow-lg shadow-emerald-500/20"
+                  >
+                    <Plus size={20} />
+                  </button>
+                </div>
+
+                <div className="space-y-3">
+                  {users.map(user => (
+                    <div key={user.id} className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm flex justify-between items-center">
+                      <div>
+                        <p className="font-bold text-slate-900">{user.username}</p>
+                        <p className="text-[10px] text-slate-500 uppercase font-black tracking-widest">{user.role}</p>
+                      </div>
+                      <div className="flex gap-2">
+                        <button 
+                          onClick={() => {
+                            setEditingUser(user);
+                            setIsUserModalOpen(true);
+                          }}
+                          className="p-2 text-slate-400 hover:text-emerald-500 transition-colors"
+                        >
+                          <Settings size={18} />
+                        </button>
+                        <button 
+                          onClick={() => handleDeleteUser(user.id)}
+                          className="p-2 text-slate-400 hover:text-red-500 transition-colors"
+                        >
+                          <Trash size={18} />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </>
         )}
       </main>
@@ -807,6 +931,9 @@ export default function App() {
         <NavButton active={activeTab === 'pos'} onClick={() => setActiveTab('pos')} icon={<ShoppingCart size={20} />} label="POS" />
         <NavButton active={activeTab === 'history'} onClick={() => setActiveTab('history')} icon={<History size={20} />} label="History" />
         <NavButton active={activeTab === 'inventory'} onClick={() => setActiveTab('inventory')} icon={<Package size={20} />} label="Stock" />
+        {currentUser?.role === 'tenant_admin' && (
+          <NavButton active={activeTab === 'users'} onClick={() => setActiveTab('users')} icon={<Users size={20} />} label="Users" />
+        )}
       </nav>
 
       {/* Notifications Modal */}
@@ -1029,6 +1156,83 @@ export default function App() {
               </div>
             </div>
           </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* User Management Modal */}
+      <AnimatePresence>
+        {isUserModalOpen && (
+          <>
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setIsUserModalOpen(false)}
+              className="absolute inset-0 bg-slate-900/60 backdrop-blur-md z-[100]"
+            />
+            <motion.div 
+              initial={{ y: '100%' }}
+              animate={{ y: 0 }}
+              exit={{ y: '100%' }}
+              className="absolute bottom-0 left-0 right-0 bg-white rounded-t-[2.5rem] shadow-2xl z-[100] p-8 space-y-6"
+            >
+              <div className="text-center">
+                <h2 className="text-2xl font-black text-slate-900">{editingUser?.id ? 'Edit User' : 'Create User'}</h2>
+                <p className="text-slate-500 text-sm">Manage staff access for your store</p>
+              </div>
+
+              <form onSubmit={handleSaveUser} className="space-y-4">
+                <div>
+                  <label className="text-slate-400 text-[10px] font-bold uppercase tracking-widest mb-2 block">Username</label>
+                  <input 
+                    type="text"
+                    required
+                    className="w-full bg-slate-50 border border-slate-200 p-4 rounded-2xl text-slate-900 focus:outline-none focus:border-emerald-500 transition-all"
+                    value={editingUser?.username || ''}
+                    onChange={(e) => setEditingUser({...editingUser, username: e.target.value})}
+                  />
+                </div>
+                <div>
+                  <label className="text-slate-400 text-[10px] font-bold uppercase tracking-widest mb-2 block">
+                    {editingUser?.id ? 'New Password (leave blank to keep current)' : 'Password'}
+                  </label>
+                  <input 
+                    type="password"
+                    required={!editingUser?.id}
+                    className="w-full bg-slate-50 border border-slate-200 p-4 rounded-2xl text-slate-900 focus:outline-none focus:border-emerald-500 transition-all"
+                    value={editingUser?.password || ''}
+                    onChange={(e) => setEditingUser({...editingUser, password: e.target.value})}
+                  />
+                </div>
+                <div>
+                  <label className="text-slate-400 text-[10px] font-bold uppercase tracking-widest mb-2 block">Role</label>
+                  <select 
+                    className="w-full bg-slate-50 border border-slate-200 p-4 rounded-2xl text-slate-900 focus:outline-none focus:border-emerald-500 transition-all appearance-none"
+                    value={editingUser?.role || 'staff'}
+                    onChange={(e) => setEditingUser({...editingUser, role: e.target.value as any})}
+                  >
+                    <option value="staff">Staff</option>
+                    <option value="tenant_admin">Admin</option>
+                  </select>
+                </div>
+                <div className="flex gap-3 pt-4">
+                  <button 
+                    type="button"
+                    onClick={() => setIsUserModalOpen(false)}
+                    className="flex-1 py-4 text-slate-400 font-bold text-sm"
+                  >
+                    Cancel
+                  </button>
+                  <button 
+                    type="submit"
+                    className="flex-1 bg-emerald-500 text-white py-4 rounded-2xl font-black shadow-lg shadow-emerald-500/20"
+                  >
+                    Save User
+                  </button>
+                </div>
+              </form>
+            </motion.div>
+          </>
         )}
       </AnimatePresence>
     </div>

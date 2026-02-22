@@ -56,6 +56,15 @@ db.exec(`
     status TEXT DEFAULT 'pending',
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   );
+
+  CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER,
+    username TEXT UNIQUE NOT NULL,
+    password TEXT NOT NULL,
+    role TEXT CHECK(role IN ('super_admin', 'tenant_admin', 'staff')) NOT NULL,
+    FOREIGN KEY(tenant_id) REFERENCES tenants(id)
+  );
 `);
 
 // Function to check and generate subscription notifications
@@ -123,6 +132,12 @@ if (tenantCount.count === 0) {
     insertProduct.run(tid, "Cappuccino", 4.00, "Beverages", 40, "https://picsum.photos/seed/cappuccino/200/200");
     insertProduct.run(tid, "Croissant", 3.25, "Bakery", 30, "https://picsum.photos/seed/croissant/200/200");
   });
+
+  // Seed users
+  const insertUser = db.prepare("INSERT INTO users (tenant_id, username, password, role) VALUES (?, ?, ?, ?)");
+  insertUser.run(null, "admin", "admin123", "super_admin");
+  insertUser.run(1, "coffee_admin", "coffee123", "tenant_admin");
+  insertUser.run(2, "bakery_admin", "bakery123", "tenant_admin");
 }
 
 async function startServer() {
@@ -130,6 +145,58 @@ async function startServer() {
   const PORT = 3000;
 
   app.use(express.json());
+
+  // Auth Routes
+  app.post("/api/auth/login", (req, res) => {
+    const { username, password } = req.body;
+    const user = db.prepare("SELECT * FROM users WHERE username = ? AND password = ?").get(username, password) as any;
+    
+    if (!user) {
+      return res.status(401).json({ error: "Invalid credentials" });
+    }
+    
+    let tenant = null;
+    if (user.tenant_id) {
+      tenant = db.prepare("SELECT * FROM tenants WHERE id = ?").get(user.tenant_id);
+    }
+    
+    res.json({ user, tenant });
+  });
+
+  // User Management Routes (Tenant Level)
+  app.get("/api/users", (req, res) => {
+    const tenantId = req.query.tenantId;
+    if (!tenantId) return res.status(400).json({ error: "Missing tenantId" });
+    const users = db.prepare("SELECT id, username, role FROM users WHERE tenant_id = ?").all(tenantId);
+    res.json(users);
+  });
+
+  app.post("/api/users", (req, res) => {
+    const { tenant_id, username, password, role } = req.body;
+    try {
+      const info = db.prepare("INSERT INTO users (tenant_id, username, password, role) VALUES (?, ?, ?, ?)").run(tenant_id, username, password, role);
+      res.json({ id: info.lastInsertRowid });
+    } catch (e: any) {
+      res.status(400).json({ error: "Username already exists" });
+    }
+  });
+
+  app.patch("/api/users/:id", (req, res) => {
+    const { id } = req.params;
+    const { username, password, role } = req.body;
+    if (password) {
+      db.prepare("UPDATE users SET username = ?, password = ?, role = ? WHERE id = ?").run(username, password, role, id);
+    } else {
+      db.prepare("UPDATE users SET username = ?, role = ? WHERE id = ?").run(username, role, id);
+    }
+    res.json({ success: true });
+  });
+
+  app.delete("/api/users/:id", (req, res) => {
+    const { id } = req.params;
+    db.prepare("DELETE FROM users WHERE id = ?").run(id);
+    res.json({ success: true });
+  });
 
   // API Routes
   app.get("/api/tenants", (req, res) => {
