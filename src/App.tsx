@@ -824,23 +824,45 @@ export default function App() {
 
             {activeTab === 'history' && (
               <div className="space-y-3">
-                <h2 className="text-lg font-black text-slate-900 mb-4">Transaction History</h2>
+                <div className="flex justify-between items-center mb-4">
+                  <h2 className="text-lg font-black text-slate-900">Transaction History</h2>
+                  <div className="bg-slate-100 px-3 py-1 rounded-full">
+                    <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">{transactions.length} Total</p>
+                  </div>
+                </div>
                 {transactions.map(t => (
-                  <div key={t.id} className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm">
-                    <div className="flex justify-between items-start mb-2">
+                  <div key={t.id} className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm hover:border-emerald-500/30 transition-all group">
+                    <div className="flex justify-between items-start mb-3">
                       <div>
-                        <p className="font-bold text-slate-900">Order #{t.id}</p>
-                        <p className="text-[10px] text-slate-500">{new Date(t.timestamp).toLocaleString()}</p>
-                      </div>
-                      <p className="text-lg font-black text-emerald-600">${t.total.toFixed(2)}</p>
-                    </div>
-                    <div className="text-[10px] text-slate-600 border-t border-slate-50 pt-2 mt-2 space-y-1">
-                      {t.items.map(item => (
-                        <div key={item.id} className="flex justify-between">
-                          <span className="font-medium">{item.name} x{item.quantity}</span>
-                          <span className="font-bold">${(item.price * item.quantity).toFixed(2)}</span>
+                        <div className="flex items-center gap-2 mb-1">
+                          <p className="font-black text-slate-900">Order #{t.id}</p>
+                          <span className="text-[9px] font-black bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded uppercase">Paid</span>
                         </div>
-                      ))}
+                        <p className="text-[10px] text-slate-400 font-medium">{new Date(t.timestamp).toLocaleString()}</p>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-lg font-black text-emerald-600">${t.total.toFixed(2)}</p>
+                        <p className="text-[9px] font-bold text-slate-400 uppercase tracking-tighter">
+                          {t.items.reduce((acc, item) => acc + item.quantity, 0)} items
+                        </p>
+                      </div>
+                    </div>
+                    
+                    <div className="bg-slate-50/50 rounded-xl p-3 border border-slate-50">
+                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2">Items Summary</p>
+                      <div className="space-y-2">
+                        {t.items.map(item => (
+                          <div key={item.id} className="flex justify-between items-center text-[11px]">
+                            <div className="flex items-center gap-2">
+                              <span className="w-5 h-5 bg-white border border-slate-100 rounded flex items-center justify-center font-black text-slate-400 text-[9px]">
+                                {item.quantity}
+                              </span>
+                              <span className="font-bold text-slate-700">{item.name}</span>
+                            </div>
+                            <span className="font-black text-slate-400">${(item.price * item.quantity).toFixed(2)}</span>
+                          </div>
+                        ))}
+                      </div>
                     </div>
                   </div>
                 ))}
