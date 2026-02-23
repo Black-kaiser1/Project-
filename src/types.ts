@@ -35,6 +35,23 @@ export interface DashboardStats {
   transactionCount: number;
 }
 
+export interface DetailedStats {
+  totalSales: {
+    daily: number;
+    weekly: number;
+    monthly: number;
+  };
+  bestSellers: {
+    name: string;
+    quantity: number;
+    revenue: number;
+  }[];
+  salesTrends: {
+    date: string;
+    amount: number;
+  }[];
+}
+
 export interface Notification {
   id: number;
   tenant_id: number;

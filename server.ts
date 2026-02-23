@@ -319,6 +319,55 @@ async function startServer() {
     });
   });
 
+  app.get("/api/dashboard/detailed-stats", (req, res) => {
+    const tenantId = req.query.tenantId;
+    if (!tenantId) return res.status(400).json({ error: "Missing tenantId" });
+
+    // Total Sales
+    const daily = db.prepare("SELECT SUM(total) as total FROM transactions WHERE tenant_id = ? AND date(timestamp) = date('now')").get(tenantId) as any;
+    const weekly = db.prepare("SELECT SUM(total) as total FROM transactions WHERE tenant_id = ? AND date(timestamp) >= date('now', '-7 days')").get(tenantId) as any;
+    const monthly = db.prepare("SELECT SUM(total) as total FROM transactions WHERE tenant_id = ? AND date(timestamp) >= date('now', '-30 days')").get(tenantId) as any;
+
+    // Sales Trends (last 30 days)
+    const trends = db.prepare(`
+      SELECT date(timestamp) as date, SUM(total) as amount 
+      FROM transactions 
+      WHERE tenant_id = ? AND date(timestamp) >= date('now', '-30 days')
+      GROUP BY date(timestamp)
+      ORDER BY date(timestamp) ASC
+    `).all(tenantId) as any[];
+
+    // Best Sellers
+    const transactions = db.prepare("SELECT items FROM transactions WHERE tenant_id = ? AND date(timestamp) >= date('now', '-30 days')").all(tenantId) as any[];
+    const productStats: Record<string, { quantity: number, revenue: number }> = {};
+
+    transactions.forEach(t => {
+      const items = JSON.parse(t.items);
+      items.forEach((item: any) => {
+        if (!productStats[item.name]) {
+          productStats[item.name] = { quantity: 0, revenue: 0 };
+        }
+        productStats[item.name].quantity += item.quantity;
+        productStats[item.name].revenue += (item.price * item.quantity);
+      });
+    });
+
+    const bestSellers = Object.entries(productStats)
+      .map(([name, stats]) => ({ name, ...stats }))
+      .sort((a, b) => b.quantity - a.quantity)
+      .slice(0, 5);
+
+    res.json({
+      totalSales: {
+        daily: daily?.total || 0,
+        weekly: weekly?.total || 0,
+        monthly: monthly?.total || 0
+      },
+      salesTrends: trends,
+      bestSellers
+    });
+  });
+
   // Subscription Payments (Tenant Side)
   app.post("/api/subscription/pay", (req, res) => {
     const { tenantId, plan, amount, paymentMethod, reference } = req.body;

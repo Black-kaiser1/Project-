@@ -30,7 +30,19 @@ import {
   CloudUpload
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Product, CartItem, Transaction, DashboardStats, Tenant, Notification, AdminStats, User, SubscriptionPayment } from './types';
+import { 
+  AreaChart, 
+  Area, 
+  XAxis, 
+  YAxis, 
+  CartesianGrid, 
+  Tooltip, 
+  ResponsiveContainer,
+  BarChart,
+  Bar,
+  Cell
+} from 'recharts';
+import { Product, CartItem, Transaction, DashboardStats, Tenant, Notification, AdminStats, User, SubscriptionPayment, DetailedStats } from './types';
 
 export default function App() {
   const [view, setView] = useState<'login' | 'store' | 'admin'>('login');
@@ -50,6 +62,7 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState('');
   const [isCartOpen, setIsCartOpen] = useState(false);
   const [stats, setStats] = useState<DashboardStats>({ dailyTotal: 0, transactionCount: 0 });
+  const [detailedStats, setDetailedStats] = useState<DetailedStats | null>(null);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
@@ -119,6 +132,7 @@ export default function App() {
     if (remaining.length === 0) {
       localStorage.removeItem(`offline_tx_${currentTenant.id}`);
       fetchStats();
+      fetchDetailedStats();
       fetchTransactions();
       fetchProducts();
     } else {
@@ -136,6 +150,7 @@ export default function App() {
     if (currentTenant) {
       fetchProducts();
       fetchStats();
+      fetchDetailedStats();
       fetchTransactions();
       fetchNotifications();
       fetchSubscriptionHistory();
@@ -470,6 +485,13 @@ export default function App() {
     setStats(data);
   };
 
+  const fetchDetailedStats = async () => {
+    if (!currentTenant) return;
+    const res = await fetch(`/api/dashboard/detailed-stats?tenantId=${currentTenant.id}`);
+    const data = await res.json();
+    setDetailedStats(data);
+  };
+
   const fetchTransactions = async () => {
     if (!currentTenant) return;
     const res = await fetch(`/api/transactions?tenantId=${currentTenant.id}`);
@@ -621,6 +643,7 @@ export default function App() {
         setShowSuccess(true);
         fetchProducts();
         fetchStats();
+        fetchDetailedStats();
         fetchTransactions();
         setTimeout(() => setShowSuccess(false), 5000);
       } else {
@@ -1122,46 +1145,138 @@ export default function App() {
           <>
             {activeTab === 'dashboard' && (
               <div className="space-y-6">
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-100">
-                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Today's Sales</p>
-                    <p className="text-2xl font-black text-slate-900">${stats.dailyTotal.toFixed(2)}</p>
+                {/* Real-time Sales Overview */}
+                <div className="grid grid-cols-3 gap-3">
+                  <div className="bg-white p-3 rounded-2xl shadow-sm border border-slate-100">
+                    <p className="text-[9px] font-bold text-slate-400 uppercase tracking-wider mb-1">Daily</p>
+                    <p className="text-sm font-black text-slate-900">₵{detailedStats?.totalSales.daily.toFixed(2) || '0.00'}</p>
                   </div>
-                  <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-100">
-                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Transactions</p>
-                    <p className="text-2xl font-black text-slate-900">{stats.transactionCount}</p>
+                  <div className="bg-white p-3 rounded-2xl shadow-sm border border-slate-100">
+                    <p className="text-[9px] font-bold text-slate-400 uppercase tracking-wider mb-1">Weekly</p>
+                    <p className="text-sm font-black text-slate-900">₵{detailedStats?.totalSales.weekly.toFixed(2) || '0.00'}</p>
                   </div>
-                </div>
-
-                <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100">
-                  <div className="flex justify-between items-center mb-4">
-                    <h3 className="text-sm font-bold text-slate-900">Subscription</h3>
-                    <span className="text-[10px] font-bold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full uppercase">Active</span>
-                  </div>
-                  <div className="flex items-center gap-4">
-                    <div className="w-12 h-12 bg-slate-100 rounded-xl flex items-center justify-center text-slate-500">
-                      <Calendar size={24} />
-                    </div>
-                    <div className="flex-1">
-                      <p className="text-xs font-bold text-slate-800">{currentTenant.plan.charAt(0).toUpperCase() + currentTenant.plan.slice(1)} Plan</p>
-                      <p className="text-[10px] text-slate-500">Expires: {new Date(currentTenant.expiry_date).toLocaleDateString()}</p>
-                    </div>
-                    <button onClick={() => setIsRenewing(true)} className="text-[10px] font-bold text-emerald-600 hover:underline">Manage</button>
+                  <div className="bg-white p-3 rounded-2xl shadow-sm border border-slate-100">
+                    <p className="text-[9px] font-bold text-slate-400 uppercase tracking-wider mb-1">Monthly</p>
+                    <p className="text-sm font-black text-slate-900">₵{detailedStats?.totalSales.monthly.toFixed(2) || '0.00'}</p>
                   </div>
                 </div>
 
-                <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100">
-                  <h3 className="text-sm font-bold text-slate-900 mb-4">Recent Activity</h3>
-                  <div className="space-y-4">
-                    {transactions.slice(0, 5).map(t => (
-                      <div key={t.id} className="flex justify-between items-center text-sm">
-                        <div>
-                          <p className="font-bold text-slate-800">Order #{t.id}</p>
-                          <p className="text-[10px] text-slate-500">{new Date(t.timestamp).toLocaleTimeString()}</p>
-                        </div>
-                        <p className="font-black text-emerald-600">+${t.total.toFixed(2)}</p>
+                {/* Sales Trend Chart */}
+                <div className="bg-white p-5 rounded-3xl shadow-sm border border-slate-100">
+                  <div className="flex justify-between items-center mb-6">
+                    <h3 className="text-sm font-black text-slate-900 uppercase tracking-widest">Sales Trend</h3>
+                    <div className="flex items-center gap-1 text-[10px] font-bold text-emerald-500 bg-emerald-50 px-2 py-0.5 rounded-full">
+                      <TrendingUp size={12} />
+                      <span>Last 30 Days</span>
+                    </div>
+                  </div>
+                  <div className="h-[200px] w-full">
+                    {detailedStats?.salesTrends && detailedStats.salesTrends.length > 0 ? (
+                      <ResponsiveContainer width="100%" height="100%">
+                        <AreaChart data={detailedStats.salesTrends}>
+                          <defs>
+                            <linearGradient id="colorAmount" x1="0" y1="0" x2="0" y2="1">
+                              <stop offset="5%" stopColor="#10b981" stopOpacity={0.3}/>
+                              <stop offset="95%" stopColor="#10b981" stopOpacity={0}/>
+                            </linearGradient>
+                          </defs>
+                          <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                          <XAxis 
+                            dataKey="date" 
+                            axisLine={false} 
+                            tickLine={false} 
+                            tick={{ fontSize: 9, fontWeight: 600, fill: '#94a3b8' }}
+                            tickFormatter={(str) => {
+                              const date = new Date(str);
+                              return date.getDate().toString();
+                            }}
+                          />
+                          <YAxis 
+                            axisLine={false} 
+                            tickLine={false} 
+                            tick={{ fontSize: 9, fontWeight: 600, fill: '#94a3b8' }}
+                            tickFormatter={(val) => `₵${val}`}
+                          />
+                          <Tooltip 
+                            contentStyle={{ 
+                              borderRadius: '12px', 
+                              border: 'none', 
+                              boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)',
+                              fontSize: '10px',
+                              fontWeight: 'bold'
+                            }}
+                          />
+                          <Area 
+                            type="monotone" 
+                            dataKey="amount" 
+                            stroke="#10b981" 
+                            strokeWidth={3}
+                            fillOpacity={1} 
+                            fill="url(#colorAmount)" 
+                          />
+                        </AreaChart>
+                      </ResponsiveContainer>
+                    ) : (
+                      <div className="h-full flex items-center justify-center text-slate-400 text-xs font-bold">
+                        No trend data available
                       </div>
-                    ))}
+                    )}
+                  </div>
+                </div>
+
+                {/* Best Selling Products */}
+                <div className="bg-white p-5 rounded-3xl shadow-sm border border-slate-100">
+                  <h3 className="text-sm font-black text-slate-900 uppercase tracking-widest mb-4">Best Sellers</h3>
+                  <div className="space-y-4">
+                    {detailedStats?.bestSellers && detailedStats.bestSellers.length > 0 ? (
+                      detailedStats.bestSellers.map((product, idx) => (
+                        <div key={idx} className="flex items-center gap-4">
+                          <div className="w-8 h-8 bg-slate-100 rounded-xl flex items-center justify-center text-slate-500 font-black text-xs">
+                            {idx + 1}
+                          </div>
+                          <div className="flex-1">
+                            <p className="text-xs font-bold text-slate-800">{product.name}</p>
+                            <div className="w-full bg-slate-100 h-1.5 rounded-full mt-1 overflow-hidden">
+                              <motion.div 
+                                initial={{ width: 0 }}
+                                animate={{ width: `${(product.quantity / detailedStats.bestSellers[0].quantity) * 100}%` }}
+                                className="bg-emerald-500 h-full rounded-full"
+                              />
+                            </div>
+                          </div>
+                          <div className="text-right">
+                            <p className="text-xs font-black text-slate-900">{product.quantity} sold</p>
+                            <p className="text-[9px] font-bold text-emerald-500">₵{product.revenue.toFixed(2)}</p>
+                          </div>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="text-center py-4 text-slate-400 text-xs font-bold">
+                        No sales data yet
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Subscription Summary */}
+                <div className="bg-slate-900 p-5 rounded-3xl shadow-xl text-white">
+                  <div className="flex justify-between items-center mb-4">
+                    <div>
+                      <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Store Status</p>
+                      <h3 className="text-sm font-black uppercase tracking-widest">{currentTenant.plan} Plan</h3>
+                    </div>
+                    <div className="bg-emerald-500/20 p-2 rounded-xl text-emerald-400">
+                      <ShieldCheck size={20} />
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2 text-[10px] font-bold text-slate-400">
+                      <Calendar size={14} />
+                      <span>Expires: {new Date(currentTenant.expiry_date).toLocaleDateString()}</span>
+                    </div>
+                    <button onClick={() => setIsRenewing(true)} className="text-[10px] font-black uppercase tracking-widest bg-white text-slate-900 px-4 py-2 rounded-xl">
+                      Manage
+                    </button>
                   </div>
                 </div>
               </div>
