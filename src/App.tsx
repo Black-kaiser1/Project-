@@ -25,7 +25,9 @@ import {
   TrendingUp,
   PlusCircle,
   Trash,
-  Printer
+  Printer,
+  WifiOff,
+  CloudUpload
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Product, CartItem, Transaction, DashboardStats, Tenant, Notification, AdminStats, User, SubscriptionPayment } from './types';
@@ -66,6 +68,65 @@ export default function App() {
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
   const [pendingPayment, setPendingPayment] = useState<{ paymentId: string, amount: number } | null>(null);
   const [newTenant, setNewTenant] = useState({ name: '', email: '', plan: 'monthly', expiry_days: 30 });
+  const [isOnline, setIsOnline] = useState(navigator.onLine);
+  const [isSyncing, setIsSyncing] = useState(false);
+
+  useEffect(() => {
+    const handleOnline = () => setIsOnline(true);
+    const handleOffline = () => setIsOnline(false);
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (isOnline && currentTenant) {
+      syncOfflineTransactions();
+    }
+  }, [isOnline, currentTenant]);
+
+  const syncOfflineTransactions = async () => {
+    if (!currentTenant || isSyncing) return;
+    
+    const offlineData = localStorage.getItem(`offline_tx_${currentTenant.id}`);
+    if (!offlineData) return;
+
+    const pendingTransactions = JSON.parse(offlineData);
+    if (pendingTransactions.length === 0) return;
+
+    setIsSyncing(true);
+    console.log(`Syncing ${pendingTransactions.length} offline transactions...`);
+
+    const remaining = [];
+    for (const tx of pendingTransactions) {
+      try {
+        const res = await fetch('/api/transactions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(tx)
+        });
+        if (!res.ok) remaining.push(tx);
+      } catch (e) {
+        remaining.push(tx);
+      }
+    }
+
+    if (remaining.length === 0) {
+      localStorage.removeItem(`offline_tx_${currentTenant.id}`);
+      fetchStats();
+      fetchTransactions();
+      fetchProducts();
+    } else {
+      localStorage.setItem(`offline_tx_${currentTenant.id}`, JSON.stringify(remaining));
+    }
+    
+    setIsSyncing(false);
+  };
 
   useEffect(() => {
     fetchTenants();
@@ -498,15 +559,51 @@ export default function App() {
   const handleCheckout = async () => {
     if (cart.length === 0 || !currentTenant) return;
 
+    const txData = {
+      total: cartTotal,
+      items: cart,
+      tenantId: currentTenant.id
+    };
+
+    if (!isOnline) {
+      // Offline Mode
+      const offlineData = localStorage.getItem(`offline_tx_${currentTenant.id}`);
+      const pending = offlineData ? JSON.parse(offlineData) : [];
+      pending.push(txData);
+      localStorage.setItem(`offline_tx_${currentTenant.id}`, JSON.stringify(pending));
+
+      // Optimistic UI update
+      const optimisticTx = {
+        id: Date.now(), // Temporary ID
+        total: cartTotal,
+        items: [...cart],
+        timestamp: new Date().toISOString(),
+        tenant_id: currentTenant.id,
+        isOffline: true
+      };
+      
+      setTransactions([optimisticTx, ...transactions]);
+      setLastTransaction(optimisticTx);
+      setCart([]);
+      setIsCartOpen(false);
+      setShowSuccess(true);
+      
+      // Update local stock optimistically
+      setProducts(prev => prev.map(p => {
+        const cartItem = cart.find(item => item.id === p.id);
+        if (cartItem) return { ...p, stock: p.stock - cartItem.quantity };
+        return p;
+      }));
+
+      setTimeout(() => setShowSuccess(false), 5000);
+      return;
+    }
+
     try {
       const res = await fetch('/api/transactions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          total: cartTotal,
-          items: cart,
-          tenantId: currentTenant.id
-        })
+        body: JSON.stringify(txData)
       });
 
       if (res.ok) {
@@ -532,6 +629,37 @@ export default function App() {
       }
     } catch (error) {
       console.error('Checkout failed', error);
+      // Fallback to offline if request fails
+      setIsOnline(false);
+      
+      // Manually trigger offline logic since state update is async
+      const offlineData = localStorage.getItem(`offline_tx_${currentTenant.id}`);
+      const pending = offlineData ? JSON.parse(offlineData) : [];
+      pending.push(txData);
+      localStorage.setItem(`offline_tx_${currentTenant.id}`, JSON.stringify(pending));
+
+      const optimisticTx = {
+        id: Date.now(),
+        total: cartTotal,
+        items: [...cart],
+        timestamp: new Date().toISOString(),
+        tenant_id: currentTenant.id,
+        isOffline: true
+      };
+      
+      setTransactions([optimisticTx, ...transactions]);
+      setLastTransaction(optimisticTx);
+      setCart([]);
+      setIsCartOpen(false);
+      setShowSuccess(true);
+      
+      setProducts(prev => prev.map(p => {
+        const cartItem = cart.find(item => item.id === p.id);
+        if (cartItem) return { ...p, stock: p.stock - cartItem.quantity };
+        return p;
+      }));
+
+      setTimeout(() => setShowSuccess(false), 5000);
     }
   };
 
@@ -912,6 +1040,18 @@ export default function App() {
           </div>
         </div>
         <div className="flex items-center gap-2">
+          {!isOnline && (
+            <div className="flex items-center gap-1 bg-red-50 text-red-600 px-2 py-1 rounded-lg text-[9px] font-black uppercase border border-red-100 animate-pulse">
+              <WifiOff size={12} />
+              <span>Offline</span>
+            </div>
+          )}
+          {isSyncing && (
+            <div className="flex items-center gap-1 bg-emerald-50 text-emerald-600 px-2 py-1 rounded-lg text-[9px] font-black uppercase border border-emerald-100">
+              <CloudUpload size={12} className="animate-bounce" />
+              <span>Syncing</span>
+            </div>
+          )}
           <button 
             onClick={() => {
               setIsNotificationsOpen(true);
@@ -1080,6 +1220,12 @@ export default function App() {
                         <div className="flex items-center gap-2 mb-1">
                           <p className="font-black text-slate-900">Order #{t.id}</p>
                           <span className="text-[9px] font-black bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded uppercase">Paid</span>
+                          {t.isOffline && (
+                            <span className="text-[9px] font-black bg-amber-100 text-amber-600 px-1.5 py-0.5 rounded uppercase flex items-center gap-1">
+                              <WifiOff size={8} />
+                              Offline
+                            </span>
+                          )}
                         </div>
                         <p className="text-[10px] text-slate-400 font-medium">{new Date(t.timestamp).toLocaleString()}</p>
                       </div>

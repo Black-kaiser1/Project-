@@ -27,6 +27,7 @@ export interface Transaction {
   total: number;
   items: CartItem[];
   timestamp: string;
+  isOffline?: boolean;
 }
 
 export interface DashboardStats {
