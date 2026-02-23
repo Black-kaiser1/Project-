@@ -66,6 +66,18 @@ db.exec(`
     role TEXT CHECK(role IN ('super_admin', 'tenant_admin', 'staff')) NOT NULL,
     FOREIGN KEY(tenant_id) REFERENCES tenants(id)
   );
+
+  CREATE TABLE IF NOT EXISTS subscription_payments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    plan TEXT NOT NULL,
+    amount REAL NOT NULL,
+    payment_method TEXT NOT NULL,
+    reference TEXT NOT NULL,
+    status TEXT DEFAULT 'pending',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(tenant_id) REFERENCES tenants(id)
+  );
 `);
 
 // Add low_stock_threshold column if it doesn't exist
@@ -305,6 +317,85 @@ async function startServer() {
       dailyTotal: dailyTotal.total || 0,
       transactionCount: totalTransactions.count || 0
     });
+  });
+
+  // Subscription Payments (Tenant Side)
+  app.post("/api/subscription/pay", (req, res) => {
+    const { tenantId, plan, amount, paymentMethod, reference } = req.body;
+    if (!tenantId) return res.status(400).json({ error: "Missing tenantId" });
+
+    db.prepare("INSERT INTO subscription_payments (tenant_id, plan, amount, payment_method, reference) VALUES (?, ?, ?, ?, ?)").run(
+      tenantId, plan, amount, paymentMethod, reference
+    );
+
+    // Notify admin
+    db.prepare("INSERT INTO notifications (tenant_id, message, type) VALUES (null, ?, ?)").run(
+      `New subscription payment request from tenant #${tenantId} (${plan} plan).`, 'info'
+    );
+
+    res.json({ success: true });
+  });
+
+  app.get("/api/subscription/history", (req, res) => {
+    const tenantId = req.query.tenantId;
+    if (!tenantId) return res.status(400).json({ error: "Missing tenantId" });
+    const history = db.prepare("SELECT * FROM subscription_payments WHERE tenant_id = ? ORDER BY created_at DESC").all(tenantId);
+    res.json(history);
+  });
+
+  // Subscription Management (Admin Side)
+  app.get("/api/admin/subscriptions/pending", (req, res) => {
+    const pending = db.prepare(`
+      SELECT sp.*, t.name as tenant_name 
+      FROM subscription_payments sp 
+      JOIN tenants t ON sp.tenant_id = t.id 
+      WHERE sp.status = 'pending'
+      ORDER BY sp.created_at DESC
+    `).all();
+    res.json(pending);
+  });
+
+  app.post("/api/admin/subscriptions/approve", (req, res) => {
+    const { paymentId } = req.body;
+    const payment = db.prepare("SELECT * FROM subscription_payments WHERE id = ?").get(paymentId) as any;
+    
+    if (!payment) return res.status(404).json({ error: "Payment not found" });
+    if (payment.status !== 'pending') return res.status(400).json({ error: "Payment already processed" });
+
+    const days = payment.plan === 'annual' ? 365 : payment.plan === 'quarterly' ? 90 : 30;
+    
+    // Update tenant expiry
+    const tenant = db.prepare("SELECT expiry_date FROM tenants WHERE id = ?").get(payment.tenant_id) as any;
+    let currentExpiry = new Date(tenant.expiry_date);
+    if (currentExpiry < new Date()) currentExpiry = new Date();
+    
+    currentExpiry.setDate(currentExpiry.getDate() + days);
+
+    db.prepare("UPDATE tenants SET plan = ?, expiry_date = ?, status = 'active' WHERE id = ?").run(
+      payment.plan, currentExpiry.toISOString(), payment.tenant_id
+    );
+
+    // Update payment status
+    db.prepare("UPDATE subscription_payments SET status = 'approved' WHERE id = ?").run(paymentId);
+
+    // Notify tenant
+    db.prepare("INSERT INTO notifications (tenant_id, message, type) VALUES (?, ?, ?)").run(
+      payment.tenant_id, `Your ${payment.plan} subscription has been approved! New expiry: ${currentExpiry.toLocaleDateString()}`, 'success'
+    );
+
+    res.json({ success: true });
+  });
+
+  app.post("/api/admin/subscriptions/reject", (req, res) => {
+    const { paymentId, reason } = req.body;
+    db.prepare("UPDATE subscription_payments SET status = 'rejected' WHERE id = ?").run(paymentId);
+    
+    const payment = db.prepare("SELECT tenant_id FROM subscription_payments WHERE id = ?").get(paymentId) as any;
+    db.prepare("INSERT INTO notifications (tenant_id, message, type) VALUES (?, ?, ?)").run(
+      payment.tenant_id, `Your subscription payment was rejected. Reason: ${reason || 'Invalid reference'}`, 'error'
+    );
+
+    res.json({ success: true });
   });
 
   app.post("/api/renew", (req, res) => {

@@ -28,11 +28,11 @@ import {
   Printer
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Product, CartItem, Transaction, DashboardStats, Tenant, Notification, AdminStats, User } from './types';
+import { Product, CartItem, Transaction, DashboardStats, Tenant, Notification, AdminStats, User, SubscriptionPayment } from './types';
 
 export default function App() {
   const [view, setView] = useState<'login' | 'store' | 'admin'>('login');
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'pos' | 'history' | 'inventory' | 'users'>('pos');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'pos' | 'history' | 'inventory' | 'users' | 'subscription'>('pos');
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [loginData, setLoginData] = useState({ username: '', password: '' });
@@ -55,9 +55,12 @@ export default function App() {
   const [lastTransaction, setLastTransaction] = useState<Transaction | null>(null);
   const [isRenewing, setIsRenewing] = useState(false);
   const [isPrinterModalOpen, setIsPrinterModalOpen] = useState(false);
+  const [subscriptionHistory, setSubscriptionHistory] = useState<SubscriptionPayment[]>([]);
+  const [isSubmittingPayment, setIsSubmittingPayment] = useState(false);
 
   // Admin State
   const [adminStats, setAdminStats] = useState<AdminStats | null>(null);
+  const [pendingSubscriptions, setPendingSubscriptions] = useState<SubscriptionPayment[]>([]);
   const [isAdminModalOpen, setIsAdminModalOpen] = useState(false);
   const [isConfirmModalOpen, setIsConfirmModalOpen] = useState(false);
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
@@ -74,6 +77,7 @@ export default function App() {
       fetchStats();
       fetchTransactions();
       fetchNotifications();
+      fetchSubscriptionHistory();
       if (currentUser?.role === 'tenant_admin') {
         fetchUsers();
       }
@@ -83,6 +87,7 @@ export default function App() {
   useEffect(() => {
     if (view === 'admin') {
       fetchAdminStats();
+      fetchPendingSubscriptions();
     }
   }, [view]);
 
@@ -202,6 +207,71 @@ export default function App() {
     const res = await fetch('/api/admin/stats');
     const data = await res.json();
     setAdminStats(data);
+  };
+
+  const fetchPendingSubscriptions = async () => {
+    const res = await fetch('/api/admin/subscriptions/pending');
+    const data = await res.json();
+    setPendingSubscriptions(data);
+  };
+
+  const fetchSubscriptionHistory = async () => {
+    if (!currentTenant) return;
+    const res = await fetch(`/api/subscription/history?tenantId=${currentTenant.id}`);
+    const data = await res.json();
+    setSubscriptionHistory(data);
+  };
+
+  const handleApproveSubscription = async (id: number) => {
+    const res = await fetch('/api/admin/subscriptions/approve', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ paymentId: id })
+    });
+    if (res.ok) {
+      fetchPendingSubscriptions();
+      fetchTenants();
+      fetchAdminStats();
+    }
+  };
+
+  const handleRejectSubscription = async (id: number) => {
+    const reason = prompt('Reason for rejection:');
+    if (reason === null) return;
+    const res = await fetch('/api/admin/subscriptions/reject', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ paymentId: id, reason })
+    });
+    if (res.ok) {
+      fetchPendingSubscriptions();
+    }
+  };
+
+  const handlePaySubscription = async (plan: 'monthly' | 'quarterly' | 'annual', amount: number, paymentMethod: string, reference: string) => {
+    if (!currentTenant) return;
+    setIsSubmittingPayment(true);
+    try {
+      const res = await fetch('/api/subscription/pay', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          tenantId: currentTenant.id,
+          plan,
+          amount,
+          paymentMethod,
+          reference
+        })
+      });
+      if (res.ok) {
+        fetchSubscriptionHistory();
+        alert('Payment request submitted successfully. Admin will verify and approve shortly.');
+      }
+    } catch (error) {
+      console.error('Payment submission failed', error);
+    } finally {
+      setIsSubmittingPayment(false);
+    }
   };
 
   const handleInitCreate = () => {
@@ -547,6 +617,46 @@ export default function App() {
               <AdminStatCard icon={<TrendingUp size={20} />} label="Total Revenue" value={`$${adminStats.totalRevenue.toFixed(0)}`} />
               <AdminStatCard icon={<ShoppingCart size={20} />} label="Transactions" value={adminStats.totalTransactions} />
               <AdminStatCard icon={<CheckCircle2 size={20} />} label="Active Stores" value={adminStats.activeTenants} />
+            </div>
+          )}
+
+          {pendingSubscriptions.length > 0 && (
+            <div className="space-y-4">
+              <h2 className="text-lg font-black text-slate-900 flex items-center gap-2">
+                Pending Subscriptions
+                <span className="bg-amber-500 text-white text-[10px] px-2 py-0.5 rounded-full">{pendingSubscriptions.length}</span>
+              </h2>
+              <div className="space-y-3">
+                {pendingSubscriptions.map(sub => (
+                  <div key={sub.id} className="bg-white p-4 rounded-2xl border border-amber-100 shadow-sm space-y-3">
+                    <div className="flex justify-between items-start">
+                      <div>
+                        <h3 className="font-bold text-slate-900">{sub.tenant_name}</h3>
+                        <p className="text-[10px] text-slate-500 uppercase font-black tracking-widest">{sub.plan} Plan - {sub.amount} GH₵</p>
+                      </div>
+                      <span className="bg-amber-100 text-amber-600 text-[9px] font-black px-2 py-0.5 rounded-full uppercase">Pending</span>
+                    </div>
+                    <div className="bg-slate-50 p-3 rounded-xl">
+                      <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mb-1">Reference</p>
+                      <p className="text-xs font-mono font-bold text-slate-700">{sub.reference}</p>
+                    </div>
+                    <div className="flex gap-2">
+                      <button 
+                        onClick={() => handleApproveSubscription(sub.id)}
+                        className="flex-1 bg-emerald-500 text-white text-xs font-black py-2 rounded-xl shadow-lg shadow-emerald-500/20"
+                      >
+                        Approve
+                      </button>
+                      <button 
+                        onClick={() => handleRejectSubscription(sub.id)}
+                        className="flex-1 bg-slate-100 text-slate-500 text-xs font-black py-2 rounded-xl"
+                      >
+                        Reject
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
 
@@ -1126,6 +1236,93 @@ export default function App() {
                 </div>
               </div>
             )}
+
+            {activeTab === 'subscription' && currentUser?.role === 'tenant_admin' && (
+              <div className="space-y-6">
+                <div className="bg-emerald-500 rounded-3xl p-6 text-white shadow-xl shadow-emerald-500/20">
+                  <div className="flex justify-between items-start mb-4">
+                    <div>
+                      <p className="text-emerald-100 text-xs font-bold uppercase tracking-widest mb-1">Current Plan</p>
+                      <h2 className="text-2xl font-black capitalize">{currentTenant?.plan}</h2>
+                    </div>
+                    <div className="bg-white/20 p-3 rounded-2xl backdrop-blur-sm">
+                      <ShieldCheck size={24} />
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 text-sm font-bold">
+                    <Calendar size={16} />
+                    <span>Expires: {currentTenant ? new Date(currentTenant.expiry_date).toLocaleDateString() : 'N/A'}</span>
+                  </div>
+                </div>
+
+                <div className="space-y-4">
+                  <h3 className="text-sm font-black text-slate-900 uppercase tracking-widest">Renew Subscription</h3>
+                  <div className="grid gap-4">
+                    {[
+                      { name: 'monthly', price: 150, days: 30, label: 'Monthly' },
+                      { name: 'quarterly', price: 450, days: 90, label: 'Quarterly' },
+                      { name: 'annual', price: 1800, days: 365, label: 'Yearly' }
+                    ].map(plan => (
+                      <div key={plan.name} className="bg-white border border-slate-100 p-5 rounded-3xl shadow-sm flex justify-between items-center">
+                        <div>
+                          <p className="font-black text-slate-900">{plan.label}</p>
+                          <p className="text-xs text-slate-500 font-bold">{plan.days} Days Access</p>
+                        </div>
+                        <div className="text-right">
+                          <p className="text-lg font-black text-emerald-500">{plan.price} GH₵</p>
+                          <button 
+                            disabled={isSubmittingPayment}
+                            onClick={() => {
+                              const ref = prompt(`To renew for ${plan.label}, please pay ${plan.price} GH₵ to:\n\nBank: GCB Bank\nAcc: 1234567890\nName: Lucid Hub POS\n\nOR\n\nMoMo: 0541234567 (Lucid Hub)\n\nEnter your transaction reference/ID:`);
+                              if (ref) handlePaySubscription(plan.name as any, plan.price, 'Manual', ref);
+                            }}
+                            className="text-[10px] font-black uppercase tracking-widest bg-slate-900 text-white px-4 py-2 rounded-xl mt-1 disabled:opacity-50"
+                          >
+                            {isSubmittingPayment ? '...' : 'Pay Now'}
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="space-y-4">
+                  <h3 className="text-sm font-black text-slate-900 uppercase tracking-widest">Payment History</h3>
+                  <div className="bg-white rounded-3xl border border-slate-100 shadow-sm overflow-hidden">
+                    <table className="w-full text-[10px]">
+                      <thead className="bg-slate-50 text-slate-500 text-left">
+                        <tr>
+                          <th className="px-4 py-3 font-bold uppercase">Date</th>
+                          <th className="px-4 py-3 font-bold uppercase">Plan</th>
+                          <th className="px-4 py-3 font-bold uppercase">Status</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-50">
+                        {subscriptionHistory.length === 0 ? (
+                          <tr><td colSpan={3} className="px-4 py-8 text-center text-slate-400">No history</td></tr>
+                        ) : (
+                          subscriptionHistory.map(h => (
+                            <tr key={h.id}>
+                              <td className="px-4 py-3 font-bold">{new Date(h.created_at).toLocaleDateString()}</td>
+                              <td className="px-4 py-3 font-bold uppercase">{h.plan}</td>
+                              <td className="px-4 py-3">
+                                <span className={`px-2 py-0.5 rounded-full font-black uppercase ${
+                                  h.status === 'approved' ? 'bg-emerald-100 text-emerald-600' :
+                                  h.status === 'rejected' ? 'bg-red-100 text-red-600' :
+                                  'bg-amber-100 text-amber-600'
+                                }`}>
+                                  {h.status}
+                                </span>
+                              </td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            )}
           </>
         )}
       </main>
@@ -1137,7 +1334,10 @@ export default function App() {
         <NavButton active={activeTab === 'history'} onClick={() => setActiveTab('history')} icon={<History size={20} />} label="History" />
         <NavButton active={activeTab === 'inventory'} onClick={() => setActiveTab('inventory')} icon={<Package size={20} />} label="Stock" />
         {currentUser?.role === 'tenant_admin' && (
-          <NavButton active={activeTab === 'users'} onClick={() => setActiveTab('users')} icon={<Users size={20} />} label="Users" />
+          <>
+            <NavButton active={activeTab === 'users'} onClick={() => setActiveTab('users')} icon={<Users size={20} />} label="Users" />
+            <NavButton active={activeTab === 'subscription'} onClick={() => setActiveTab('subscription')} icon={<CreditCard size={20} />} label="Plan" />
+          </>
         )}
       </nav>
 

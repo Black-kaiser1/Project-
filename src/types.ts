@@ -56,3 +56,15 @@ export interface User {
   username: string;
   role: 'super_admin' | 'tenant_admin' | 'staff';
 }
+
+export interface SubscriptionPayment {
+  id: number;
+  tenant_id: number;
+  tenant_name?: string;
+  plan: 'monthly' | 'quarterly' | 'annual';
+  amount: number;
+  payment_method: string;
+  reference: string;
+  status: 'pending' | 'approved' | 'rejected';
+  created_at: string;
+}
