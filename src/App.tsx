@@ -1016,7 +1016,7 @@ export default function App() {
                   <h2 className="text-lg font-black text-slate-900">Inventory</h2>
                   <button 
                     onClick={() => {
-                      setEditingProduct({ name: '', price: 0, category: '', stock: 0 });
+                      setEditingProduct({ name: '', price: 0, category: '', stock: 0, low_stock_threshold: 5 });
                       setIsProductModalOpen(true);
                     }}
                     className="p-2 bg-emerald-500 text-white rounded-xl shadow-lg shadow-emerald-500/20"
@@ -1030,6 +1030,7 @@ export default function App() {
                       <tr>
                         <th className="px-4 py-3 font-bold uppercase tracking-wider">Product</th>
                         <th className="px-4 py-3 font-bold uppercase tracking-wider">Stock</th>
+                        <th className="px-4 py-3 font-bold uppercase tracking-wider">Threshold</th>
                         <th className="px-4 py-3 font-bold uppercase tracking-wider text-right">Actions</th>
                       </tr>
                     </thead>
@@ -1046,9 +1047,12 @@ export default function App() {
                               <p className="text-[9px] text-slate-400 font-bold uppercase tracking-tighter">${p.price.toFixed(2)}</p>
                             </td>
                             <td className="px-4 py-3">
-                              <span className={`px-2 py-0.5 rounded-full text-[9px] font-black ${p.stock < 10 ? 'bg-red-100 text-red-600' : 'bg-emerald-100 text-emerald-600'}`}>
+                              <span className={`px-2 py-0.5 rounded-full text-[9px] font-black ${p.stock <= p.low_stock_threshold ? 'bg-red-100 text-red-600' : 'bg-emerald-100 text-emerald-600'}`}>
                                 {p.stock} UNITS
                               </span>
+                            </td>
+                            <td className="px-4 py-3">
+                              <span className="text-[10px] font-bold text-slate-500">{p.low_stock_threshold} UNITS</span>
                             </td>
                             <td className="px-4 py-3 text-right">
                               <div className="flex justify-end gap-2">
@@ -1561,6 +1565,16 @@ export default function App() {
                       onChange={(e) => setEditingProduct({...editingProduct, stock: parseInt(e.target.value)})}
                     />
                   </div>
+                </div>
+                <div>
+                  <label className="text-slate-400 text-[10px] font-bold uppercase tracking-widest mb-2 block">Low Stock Threshold</label>
+                  <input 
+                    type="number"
+                    required
+                    className="w-full bg-slate-50 border border-slate-200 p-4 rounded-2xl text-slate-900 focus:outline-none focus:border-emerald-500 transition-all"
+                    value={editingProduct?.low_stock_threshold || ''}
+                    onChange={(e) => setEditingProduct({...editingProduct, low_stock_threshold: parseInt(e.target.value)})}
+                  />
                 </div>
                 <div>
                   <label className="text-slate-400 text-[10px] font-bold uppercase tracking-widest mb-2 block">Category</label>

@@ -14,6 +14,7 @@ export interface Product {
   price: number;
   category: string;
   stock: number;
+  low_stock_threshold: number;
   image: string;
 }
 

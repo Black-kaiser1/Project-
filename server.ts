@@ -23,6 +23,7 @@ db.exec(`
     price REAL NOT NULL,
     category TEXT,
     stock INTEGER DEFAULT 0,
+    low_stock_threshold INTEGER DEFAULT 5,
     image TEXT,
     FOREIGN KEY(tenant_id) REFERENCES tenants(id)
   );
@@ -67,11 +68,19 @@ db.exec(`
   );
 `);
 
-// Function to check and generate subscription notifications
-function checkSubscriptions() {
-  const tenants = db.prepare("SELECT id, name, expiry_date FROM tenants").all() as any[];
+// Add low_stock_threshold column if it doesn't exist
+try {
+  db.exec("ALTER TABLE products ADD COLUMN low_stock_threshold INTEGER DEFAULT 5");
+} catch (e) {
+  // Column already exists
+}
+
+// Function to check and generate notifications (subscriptions and low stock)
+function checkSystemStatus() {
   const now = new Date();
   
+  // 1. Check Subscriptions
+  const tenants = db.prepare("SELECT id, name, expiry_date FROM tenants").all() as any[];
   tenants.forEach(tenant => {
     const expiry = new Date(tenant.expiry_date);
     const diffDays = Math.ceil((expiry.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
@@ -90,20 +99,31 @@ function checkSubscriptions() {
         type = "error";
       }
 
-      // Check if notification already exists for today to avoid duplicates
       const exists = db.prepare("SELECT id FROM notifications WHERE tenant_id = ? AND message = ? AND date(created_at) = date('now')").get(tenant.id, message);
-      
       if (!exists) {
         db.prepare("INSERT INTO notifications (tenant_id, message, type) VALUES (?, ?, ?)").run(tenant.id, message, type);
       }
     }
   });
+
+  // 2. Check Low Stock
+  const lowStockProducts = db.prepare("SELECT id, tenant_id, name, stock, low_stock_threshold FROM products WHERE stock <= low_stock_threshold").all() as any[];
+  lowStockProducts.forEach(product => {
+    const message = `Low stock alert: ${product.name} has only ${product.stock} units left (Threshold: ${product.low_stock_threshold})`;
+    
+    // Check if notification already exists for today
+    const exists = db.prepare("SELECT id FROM notifications WHERE tenant_id = ? AND message = ? AND date(created_at) = date('now')").get(product.tenant_id, message);
+    
+    if (!exists) {
+      db.prepare("INSERT INTO notifications (tenant_id, message, type) VALUES (?, ?, ?)").run(product.tenant_id, message, 'warning');
+    }
+  });
 }
 
 // Run check on start
-checkSubscriptions();
+checkSystemStatus();
 // Run check every hour
-setInterval(checkSubscriptions, 3600000);
+setInterval(checkSystemStatus, 3600000);
 
 // Seed tenants if empty
 const tenantCount = db.prepare("SELECT COUNT(*) as count FROM tenants").get() as { count: number };
@@ -226,18 +246,18 @@ async function startServer() {
   });
 
   app.post("/api/products", (req, res) => {
-    const { tenant_id, name, price, category, stock, image } = req.body;
-    const info = db.prepare("INSERT INTO products (tenant_id, name, price, category, stock, image) VALUES (?, ?, ?, ?, ?, ?)").run(
-      tenant_id, name, price, category, stock, image || `https://picsum.photos/seed/${name}/200/200`
+    const { tenant_id, name, price, category, stock, low_stock_threshold, image } = req.body;
+    const info = db.prepare("INSERT INTO products (tenant_id, name, price, category, stock, low_stock_threshold, image) VALUES (?, ?, ?, ?, ?, ?, ?)").run(
+      tenant_id, name, price, category, stock, low_stock_threshold || 5, image || `https://picsum.photos/seed/${name}/200/200`
     );
     res.json({ id: info.lastInsertRowid });
   });
 
   app.patch("/api/products/:id", (req, res) => {
     const { id } = req.params;
-    const { name, price, category, stock, image } = req.body;
-    db.prepare("UPDATE products SET name = ?, price = ?, category = ?, stock = ?, image = ? WHERE id = ?").run(
-      name, price, category, stock, image, id
+    const { name, price, category, stock, low_stock_threshold, image } = req.body;
+    db.prepare("UPDATE products SET name = ?, price = ?, category = ?, stock = ?, low_stock_threshold = ?, image = ? WHERE id = ?").run(
+      name, price, category, stock, low_stock_threshold, image, id
     );
     res.json({ success: true });
   });
