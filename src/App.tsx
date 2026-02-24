@@ -1760,12 +1760,6 @@ export default function App() {
                     <div className="bg-slate-50/50 rounded-xl p-3 border border-slate-50">
                       <div className="flex justify-between items-center mb-2">
                         <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Items Summary</p>
-                        <button 
-                          onClick={() => handlePrintReceipt(t)}
-                          className="p-1.5 bg-white border border-slate-200 rounded-lg text-slate-400 hover:text-emerald-500 transition-colors"
-                        >
-                          <Printer size={14} />
-                        </button>
                       </div>
                       <div className="space-y-2">
                         {t.items.map(item => (
@@ -1781,6 +1775,13 @@ export default function App() {
                         ))}
                       </div>
                     </div>
+                    <button 
+                      onClick={() => handlePrintReceipt(t)}
+                      className="mt-4 w-full py-3 bg-slate-50 hover:bg-emerald-50 text-slate-600 hover:text-emerald-600 rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-2 transition-all border border-slate-100 hover:border-emerald-200"
+                    >
+                      <Printer size={14} />
+                      Print Receipt
+                    </button>
                   </div>
                 ))}
               </div>

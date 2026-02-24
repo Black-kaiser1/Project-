@@ -165,7 +165,7 @@ if (tenantCount.count === 0) {
 }
 
 // Seed users (ensure defaults exist)
-db.prepare("INSERT OR REPLACE INTO users (tenant_id, username, password, email, role) VALUES (null, 'admin', 'admin123', 'admin@lucidhub.com', 'super_admin')").run();
+db.prepare("INSERT OR IGNORE INTO users (tenant_id, username, password, email, role) VALUES (null, 'admin', 'admin123', 'admin@lucidhub.com', 'super_admin')").run();
 
 const tenants = db.prepare("SELECT id, name, email FROM tenants").all() as any[];
 const coffee = tenants.find(t => t.name === "Lucid Coffee Shop");
