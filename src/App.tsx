@@ -90,6 +90,7 @@ export default function App() {
   const [newTenant, setNewTenant] = useState({ name: '', email: '', plan: 'monthly' as any, expiry_days: 30, password: 'password123' });
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [showLowStockOnly, setShowLowStockOnly] = useState(false);
 
   useEffect(() => {
     const handleOnline = () => setIsOnline(true);
@@ -194,6 +195,11 @@ export default function App() {
         } else {
           setCurrentTenant(tenant);
           setView('store');
+          if (user.role === 'staff') {
+            setActiveTab('pos');
+          } else {
+            setActiveTab('dashboard');
+          }
         }
       } else {
         const errorData = await res.json().catch(() => ({ error: 'Unknown error' }));
@@ -344,6 +350,17 @@ export default function App() {
     const res = await fetch(`/api/users/${id}`, { method: 'DELETE' });
     if (res.ok) {
       fetchUsers();
+    }
+  };
+
+  const handleAdjustStock = async (productId: number, adjustment: number) => {
+    const res = await fetch(`/api/products/${productId}/stock`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ adjustment })
+    });
+    if (res.ok) {
+      fetchProducts();
     }
   };
 
@@ -1269,7 +1286,11 @@ export default function App() {
                       <select 
                         className="w-full bg-slate-50 border border-slate-100 p-3 rounded-xl text-sm font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
                         value={newTenant.plan}
-                        onChange={e => setNewTenant({...newTenant, plan: e.target.value})}
+                        onChange={e => {
+                          const plan = e.target.value as any;
+                          const days = plan === 'annual' ? 365 : plan === 'quarterly' ? 90 : 30;
+                          setNewTenant({...newTenant, plan, expiry_days: days});
+                        }}
                       >
                         <option value="monthly">Monthly</option>
                         <option value="quarterly">Quarterly</option>
@@ -1455,18 +1476,20 @@ export default function App() {
               <span>Syncing</span>
             </div>
           )}
-          <button 
-            onClick={() => {
-              setIsNotificationsOpen(true);
-              markNotificationsRead();
-            }}
-            className="relative p-2 bg-slate-100 rounded-full hover:bg-slate-200 transition-colors"
-          >
-            <Bell size={18} className="text-slate-700" />
-            {notifications.some(n => !n.is_read) && (
-              <span className="absolute top-1 right-1 bg-red-500 w-2.5 h-2.5 rounded-full border-2 border-white"></span>
-            )}
-          </button>
+          {currentUser?.role !== 'staff' && (
+            <button 
+              onClick={() => {
+                setIsNotificationsOpen(true);
+                markNotificationsRead();
+              }}
+              className="relative p-2 bg-slate-100 rounded-full hover:bg-slate-200 transition-colors"
+            >
+              <Bell size={18} className="text-slate-700" />
+              {notifications.some(n => !n.is_read) && (
+                <span className="absolute top-1 right-1 bg-red-500 w-2.5 h-2.5 rounded-full border-2 border-white"></span>
+              )}
+            </button>
+          )}
           <button 
             onClick={() => setIsCartOpen(true)}
             className="relative p-2 bg-slate-100 rounded-full hover:bg-slate-200 transition-colors"
@@ -1478,13 +1501,15 @@ export default function App() {
               </span>
             )}
           </button>
-          <button 
-            onClick={() => setIsPrinterModalOpen(true)}
-            className="p-2 bg-slate-100 rounded-full hover:bg-slate-200 transition-colors"
-            title="Printer Setup"
-          >
-            <Printer size={18} className="text-slate-700" />
-          </button>
+          {currentUser?.role !== 'staff' && (
+            <button 
+              onClick={() => setIsPrinterModalOpen(true)}
+              className="p-2 bg-slate-100 rounded-full hover:bg-slate-200 transition-colors"
+              title="Printer Setup"
+            >
+              <Printer size={18} className="text-slate-700" />
+            </button>
+          )}
           {currentUser?.role === 'super_admin' && (
             <button 
               onClick={() => setView('admin')}
@@ -1523,7 +1548,7 @@ export default function App() {
           </div>
         ) : (
           <>
-            {activeTab === 'dashboard' && (
+            {activeTab === 'dashboard' && currentUser?.role !== 'staff' && (
               <div className="space-y-6">
                 {/* Real-time Sales Overview */}
                 <div className="grid grid-cols-3 gap-3">
@@ -1761,49 +1786,90 @@ export default function App() {
               </div>
             )}
 
-            {activeTab === 'inventory' && (
+            {activeTab === 'inventory' && currentUser?.role !== 'staff' && (
               <div className="space-y-4">
                 <div className="flex justify-between items-center mb-4">
-                  <h2 className="text-lg font-black text-slate-900">Inventory</h2>
-                  <button 
-                    onClick={() => {
-                      setEditingProduct({ name: '', price: 0, category: '', stock: 0, low_stock_threshold: 5 });
-                      setIsProductModalOpen(true);
-                    }}
-                    className="p-2 bg-emerald-500 text-white rounded-xl shadow-lg shadow-emerald-500/20"
-                  >
-                    <Plus size={20} />
-                  </button>
+                  <div>
+                    <h2 className="text-lg font-black text-slate-900">Inventory</h2>
+                    <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">Manage your product stock</p>
+                  </div>
+                  <div className="flex gap-2">
+                    <button 
+                      onClick={() => setShowLowStockOnly(!showLowStockOnly)}
+                      className={`p-2 rounded-xl border transition-all flex items-center gap-2 text-[10px] font-black uppercase tracking-widest ${showLowStockOnly ? 'bg-red-50 border-red-200 text-red-600' : 'bg-white border-slate-200 text-slate-500'}`}
+                    >
+                      <AlertTriangle size={14} />
+                      {showLowStockOnly ? 'Showing Low Stock' : 'Filter Low Stock'}
+                    </button>
+                    <button 
+                      onClick={() => {
+                        setEditingProduct({ name: '', price: 0, category: '', stock: 0, low_stock_threshold: 5 });
+                        setIsProductModalOpen(true);
+                      }}
+                      className="p-2 bg-emerald-500 text-white rounded-xl shadow-lg shadow-emerald-500/20"
+                    >
+                      <Plus size={20} />
+                    </button>
+                  </div>
                 </div>
+
+                <div className="grid grid-cols-2 gap-3 mb-4">
+                  <div className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm">
+                    <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Total Items</p>
+                    <p className="text-xl font-black text-slate-900">{products.length}</p>
+                  </div>
+                  <div className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm">
+                    <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Low Stock</p>
+                    <p className="text-xl font-black text-red-500">{products.filter(p => p.stock <= p.low_stock_threshold).length}</p>
+                  </div>
+                </div>
+
                 <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
                   <table className="w-full text-xs">
                     <thead className="bg-slate-50 text-slate-500 text-left">
                       <tr>
                         <th className="px-4 py-3 font-bold uppercase tracking-wider">Product</th>
                         <th className="px-4 py-3 font-bold uppercase tracking-wider">Stock</th>
-                        <th className="px-4 py-3 font-bold uppercase tracking-wider">Threshold</th>
                         <th className="px-4 py-3 font-bold uppercase tracking-wider text-right">Actions</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-50">
-                      {products.length === 0 ? (
+                      {(showLowStockOnly ? products.filter(p => p.stock <= p.low_stock_threshold) : products).length === 0 ? (
                         <tr>
-                          <td colSpan={3} className="px-4 py-8 text-center text-slate-400 font-bold">No products in inventory</td>
+                          <td colSpan={3} className="px-4 py-8 text-center text-slate-400 font-bold">
+                            {showLowStockOnly ? 'No low stock items found' : 'No products in inventory'}
+                          </td>
                         </tr>
                       ) : (
-                        products.map(p => (
+                        (showLowStockOnly ? products.filter(p => p.stock <= p.low_stock_threshold) : products).map(p => (
                           <tr key={p.id}>
                             <td className="px-4 py-3">
                               <p className="font-bold text-slate-800">{p.name}</p>
                               <p className="text-[9px] text-slate-400 font-bold uppercase tracking-tighter">${p.price.toFixed(2)}</p>
                             </td>
                             <td className="px-4 py-3">
-                              <span className={`px-2 py-0.5 rounded-full text-[9px] font-black ${p.stock <= p.low_stock_threshold ? 'bg-red-100 text-red-600' : 'bg-emerald-100 text-emerald-600'}`}>
-                                {p.stock} UNITS
-                              </span>
-                            </td>
-                            <td className="px-4 py-3">
-                              <span className="text-[10px] font-bold text-slate-500">{p.low_stock_threshold} UNITS</span>
+                              <div className="flex items-center gap-3">
+                                <span className={`px-2 py-0.5 rounded-full text-[9px] font-black ${p.stock <= p.low_stock_threshold ? 'bg-red-100 text-red-600' : 'bg-emerald-100 text-emerald-600'}`}>
+                                  {p.stock} UNITS
+                                </span>
+                                <div className="flex gap-1">
+                                  <button 
+                                    onClick={() => handleAdjustStock(p.id, -1)}
+                                    className="w-6 h-6 flex items-center justify-center bg-slate-100 text-slate-600 rounded-md hover:bg-slate-200 transition-colors"
+                                  >
+                                    <Minus size={12} />
+                                  </button>
+                                  <button 
+                                    onClick={() => handleAdjustStock(p.id, 1)}
+                                    className="w-6 h-6 flex items-center justify-center bg-slate-100 text-slate-600 rounded-md hover:bg-slate-200 transition-colors"
+                                  >
+                                    <Plus size={12} />
+                                  </button>
+                                </div>
+                              </div>
+                              {p.stock <= p.low_stock_threshold && (
+                                <p className="text-[8px] text-red-500 font-bold uppercase mt-1">Below threshold ({p.low_stock_threshold})</p>
+                              )}
                             </td>
                             <td className="px-4 py-3 text-right">
                               <div className="flex justify-end gap-2">
@@ -1965,7 +2031,7 @@ export default function App() {
                 </div>
               </div>
             )}
-            {activeTab === 'settings' && (
+            {activeTab === 'settings' && currentUser?.role !== 'staff' && (
               <div className="space-y-6">
                 <div className="bg-white p-6 rounded-[2.5rem] border border-slate-100 shadow-sm">
                   <div className="flex items-center gap-4 mb-8">
@@ -2037,11 +2103,17 @@ export default function App() {
 
       {/* Bottom Navigation */}
       <nav className="fixed bottom-0 left-0 right-0 max-w-md mx-auto bg-white/80 backdrop-blur-lg border-t border-slate-200 px-6 py-3 flex justify-between items-center z-40">
-        <NavButton active={activeTab === 'dashboard'} onClick={() => setActiveTab('dashboard')} icon={<LayoutDashboard size={20} />} label="Home" />
+        {currentUser?.role !== 'staff' && (
+          <NavButton active={activeTab === 'dashboard'} onClick={() => setActiveTab('dashboard')} icon={<LayoutDashboard size={20} />} label="Home" />
+        )}
         <NavButton active={activeTab === 'pos'} onClick={() => setActiveTab('pos')} icon={<ShoppingCart size={20} />} label="POS" />
         <NavButton active={activeTab === 'history'} onClick={() => setActiveTab('history')} icon={<History size={20} />} label="History" />
-        <NavButton active={activeTab === 'inventory'} onClick={() => setActiveTab('inventory')} icon={<Package size={20} />} label="Stock" />
-        <NavButton active={activeTab === 'settings'} onClick={() => setActiveTab('settings')} icon={<Settings size={20} />} label="Settings" />
+        {currentUser?.role !== 'staff' && (
+          <>
+            <NavButton active={activeTab === 'inventory'} onClick={() => setActiveTab('inventory')} icon={<Package size={20} />} label="Stock" />
+            <NavButton active={activeTab === 'settings'} onClick={() => setActiveTab('settings')} icon={<Settings size={20} />} label="Settings" />
+          </>
+        )}
       </nav>
 
       {/* Notifications Modal */}

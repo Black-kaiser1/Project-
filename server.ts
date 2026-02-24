@@ -312,6 +312,13 @@ async function startServer() {
     res.json({ success: true });
   });
 
+  app.patch("/api/products/:id/stock", (req, res) => {
+    const { id } = req.params;
+    const { adjustment } = req.body;
+    db.prepare("UPDATE products SET stock = stock + ? WHERE id = ?").run(adjustment, id);
+    res.json({ success: true });
+  });
+
   app.delete("/api/products/:id", (req, res) => {
     const { id } = req.params;
     db.prepare("DELETE FROM products WHERE id = ?").run(id);
@@ -488,15 +495,19 @@ async function startServer() {
   app.post("/api/renew", (req, res) => {
     const { tenantId, plan } = req.body;
     const days = plan === 'annual' ? 365 : plan === 'quarterly' ? 90 : 30;
-    const newExpiry = new Date();
-    newExpiry.setDate(newExpiry.getDate() + days);
     
-    db.prepare("UPDATE tenants SET plan = ?, expiry_date = ?, status = 'active' WHERE id = ?").run(plan, newExpiry.toISOString(), tenantId);
+    const tenant = db.prepare("SELECT expiry_date FROM tenants WHERE id = ?").get(tenantId) as any;
+    let currentExpiry = new Date(tenant.expiry_date);
+    if (currentExpiry < new Date()) currentExpiry = new Date();
+    
+    currentExpiry.setDate(currentExpiry.getDate() + days);
+    
+    db.prepare("UPDATE tenants SET plan = ?, expiry_date = ?, status = 'active' WHERE id = ?").run(plan, currentExpiry.toISOString(), tenantId);
     
     // Add success notification
     db.prepare("INSERT INTO notifications (tenant_id, message, type) VALUES (?, ?, ?)").run(tenantId, `Subscription successfully renewed for ${plan} plan.`, 'success');
     
-    res.json({ success: true, expiry_date: newExpiry.toISOString() });
+    res.json({ success: true, expiry_date: currentExpiry.toISOString() });
   });
 
   app.get("/api/notifications", (req, res) => {
