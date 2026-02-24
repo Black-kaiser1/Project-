@@ -839,14 +839,22 @@ export default function App() {
         
         <div className="bg-[#1e293b]/50 backdrop-blur-xl border border-white/5 rounded-[2.5rem] p-8 shadow-2xl relative z-10">
           <div className="text-center mb-10">
-            <div className="w-24 h-24 bg-emerald-500 rounded-[2rem] flex items-center justify-center mx-auto mb-6 shadow-2xl shadow-emerald-500/20 relative overflow-hidden group">
+            <motion.div 
+              initial={{ scale: 0.5, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              transition={{ type: "spring", stiffness: 260, damping: 20 }}
+              className="w-24 h-24 bg-white rounded-[2rem] flex items-center justify-center mx-auto mb-6 shadow-2xl shadow-emerald-500/20 relative overflow-hidden group"
+            >
+              <img 
+                src="https://picsum.photos/seed/lucidpos/200/200" 
+                alt="Lucid POS Logo" 
+                className="w-full h-full object-cover"
+                referrerPolicy="no-referrer"
+              />
               <div className="absolute inset-0 bg-gradient-to-br from-white/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
-              <div className="w-12 h-12 border-4 border-white rounded-lg flex items-center justify-center">
-                <div className="w-6 h-6 bg-white rounded-sm" />
-              </div>
-            </div>
+            </motion.div>
             <h1 className="text-4xl font-black text-white mb-2 tracking-tight">
-              Lucid<span className="text-emerald-400">Hub</span>
+              Lucid<span className="text-emerald-400">POS</span>
             </h1>
             <p className="text-slate-400 font-bold uppercase tracking-[0.2em] text-[10px] opacity-60">Enterprise SaaS POS Terminal</p>
           </div>
@@ -943,10 +951,19 @@ export default function App() {
               )}
             </div>
           ) : (
-            <form onSubmit={handleLogin} className="space-y-6">
+            <motion.form 
+              initial={{ y: 20, opacity: 0 }}
+              animate={{ y: 0, opacity: 1 }}
+              transition={{ delay: 0.2 }}
+              onSubmit={handleLogin} 
+              className="space-y-6"
+            >
               <div className="space-y-2">
                 <label className="text-slate-500 text-[10px] font-black uppercase tracking-widest ml-1">Username</label>
-                <div className="relative group">
+                <motion.div 
+                  whileFocus={{ scale: 1.01 }}
+                  className="relative group"
+                >
                   <div className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500 group-focus-within:text-emerald-400 transition-colors">
                     <Users size={18} />
                   </div>
@@ -958,7 +975,7 @@ export default function App() {
                     value={loginData.username}
                     onChange={(e) => setLoginData({...loginData, username: e.target.value})}
                   />
-                </div>
+                </motion.div>
               </div>
 
               <div className="space-y-2">
@@ -972,7 +989,10 @@ export default function App() {
                     Forgot?
                   </button>
                 </div>
-                <div className="relative group">
+                <motion.div 
+                  whileFocus={{ scale: 1.01 }}
+                  className="relative group"
+                >
                   <div className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500 group-focus-within:text-emerald-400 transition-colors">
                     <Lock size={18} />
                   </div>
@@ -984,7 +1004,7 @@ export default function App() {
                     value={loginData.password}
                     onChange={(e) => setLoginData({...loginData, password: e.target.value})}
                   />
-                </div>
+                </motion.div>
               </div>
 
               <motion.button
@@ -1003,7 +1023,7 @@ export default function App() {
                   </>
                 )}
               </motion.button>
-            </form>
+            </motion.form>
           )}
 
           <div className="mt-10 pt-8 border-t border-white/5 text-center">
