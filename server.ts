@@ -54,6 +54,7 @@ db.exec(`
     plan TEXT NOT NULL,
     expiry_days INTEGER NOT NULL,
     amount REAL NOT NULL,
+    password TEXT NOT NULL,
     status TEXT DEFAULT 'pending',
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   );
@@ -63,6 +64,7 @@ db.exec(`
     tenant_id INTEGER,
     username TEXT UNIQUE NOT NULL,
     password TEXT NOT NULL,
+    email TEXT,
     role TEXT CHECK(role IN ('super_admin', 'tenant_admin', 'staff')) NOT NULL,
     FOREIGN KEY(tenant_id) REFERENCES tenants(id)
   );
@@ -80,12 +82,16 @@ db.exec(`
   );
 `);
 
-// Add low_stock_threshold column if it doesn't exist
+// Add columns if they don't exist
 try {
   db.exec("ALTER TABLE products ADD COLUMN low_stock_threshold INTEGER DEFAULT 5");
-} catch (e) {
-  // Column already exists
-}
+} catch (e) {}
+try {
+  db.exec("ALTER TABLE pending_payments ADD COLUMN password TEXT NOT NULL DEFAULT 'password123'");
+} catch (e) {}
+try {
+  db.exec("ALTER TABLE users ADD COLUMN email TEXT");
+} catch (e) {}
 
 // Function to check and generate notifications (subscriptions and low stock)
 function checkSystemStatus() {
@@ -159,14 +165,14 @@ if (tenantCount.count === 0) {
 }
 
 // Seed users (ensure defaults exist)
-db.prepare("INSERT OR REPLACE INTO users (tenant_id, username, password, role) VALUES (null, 'admin', 'admin123', 'super_admin')").run();
+db.prepare("INSERT OR REPLACE INTO users (tenant_id, username, password, email, role) VALUES (null, 'admin', 'admin123', 'admin@lucidhub.com', 'super_admin')").run();
 
-const tenants = db.prepare("SELECT id, name FROM tenants").all() as any[];
+const tenants = db.prepare("SELECT id, name, email FROM tenants").all() as any[];
 const coffee = tenants.find(t => t.name === "Lucid Coffee Shop");
 const bakery = tenants.find(t => t.name === "Lucid Bakery");
 
-if (coffee) db.prepare("INSERT OR IGNORE INTO users (tenant_id, username, password, role) VALUES (?, ?, ?, ?)").run(coffee.id, "coffee_admin", "coffee123", "tenant_admin");
-if (bakery) db.prepare("INSERT OR IGNORE INTO users (tenant_id, username, password, role) VALUES (?, ?, ?, ?)").run(bakery.id, "bakery_admin", "bakery123", "tenant_admin");
+if (coffee) db.prepare("INSERT OR IGNORE INTO users (tenant_id, username, password, email, role) VALUES (?, ?, ?, ?, ?)").run(coffee.id, "coffee_admin", "coffee123", coffee.email, "tenant_admin");
+if (bakery) db.prepare("INSERT OR IGNORE INTO users (tenant_id, username, password, email, role) VALUES (?, ?, ?, ?, ?)").run(bakery.id, "bakery_admin", "bakery123", bakery.email, "tenant_admin");
 
 console.log("Database seeded with default users.");
 const allUsers = db.prepare("SELECT username, role FROM users").all();
@@ -204,18 +210,50 @@ async function startServer() {
     res.json({ user, tenant });
   });
 
+  app.post("/api/auth/change-password", (req, res) => {
+    const { userId, currentPassword, newPassword } = req.body;
+    
+    const user = db.prepare("SELECT * FROM users WHERE id = ? AND password = ?").get(userId, currentPassword) as any;
+    
+    if (!user) {
+      return res.status(401).json({ error: "Incorrect current password" });
+    }
+    
+    db.prepare("UPDATE users SET password = ? WHERE id = ?").run(newPassword, userId);
+    res.json({ success: true });
+  });
+
+  app.post("/api/auth/forgot-password", (req, res) => {
+    const { username, email } = req.body;
+    const user = db.prepare("SELECT id FROM users WHERE username = ? AND email = ?").get(username, email) as any;
+    
+    if (!user) {
+      return res.status(404).json({ error: "User not found with these details" });
+    }
+    
+    // In a real app, send email. Here we return a temporary "reset token" (just the user ID for demo)
+    res.json({ success: true, resetToken: user.id });
+  });
+
+  app.post("/api/auth/reset-password", (req, res) => {
+    const { resetToken, newPassword } = req.body;
+    // resetToken is userId in this demo
+    db.prepare("UPDATE users SET password = ? WHERE id = ?").run(newPassword, resetToken);
+    res.json({ success: true });
+  });
+
   // User Management Routes (Tenant Level)
   app.get("/api/users", (req, res) => {
     const tenantId = req.query.tenantId;
     if (!tenantId) return res.status(400).json({ error: "Missing tenantId" });
-    const users = db.prepare("SELECT id, username, role FROM users WHERE tenant_id = ?").all(tenantId);
+    const users = db.prepare("SELECT id, username, email, role FROM users WHERE tenant_id = ?").all(tenantId);
     res.json(users);
   });
 
   app.post("/api/users", (req, res) => {
-    const { tenant_id, username, password, role } = req.body;
+    const { tenant_id, username, password, email, role } = req.body;
     try {
-      const info = db.prepare("INSERT INTO users (tenant_id, username, password, role) VALUES (?, ?, ?, ?)").run(tenant_id, username, password, role);
+      const info = db.prepare("INSERT INTO users (tenant_id, username, password, email, role) VALUES (?, ?, ?, ?, ?)").run(tenant_id, username, password, email, role);
       res.json({ id: info.lastInsertRowid });
     } catch (e: any) {
       res.status(400).json({ error: "Username already exists" });
@@ -224,11 +262,11 @@ async function startServer() {
 
   app.patch("/api/users/:id", (req, res) => {
     const { id } = req.params;
-    const { username, password, role } = req.body;
+    const { username, password, email, role } = req.body;
     if (password) {
-      db.prepare("UPDATE users SET username = ?, password = ?, role = ? WHERE id = ?").run(username, password, role, id);
+      db.prepare("UPDATE users SET username = ?, password = ?, email = ?, role = ? WHERE id = ?").run(username, password, email, role, id);
     } else {
-      db.prepare("UPDATE users SET username = ?, role = ? WHERE id = ?").run(username, role, id);
+      db.prepare("UPDATE users SET username = ?, email = ?, role = ? WHERE id = ?").run(username, email, role, id);
     }
     res.json({ success: true });
   });
@@ -490,12 +528,12 @@ async function startServer() {
   });
 
   app.post("/api/admin/tenants/init-payment", (req, res) => {
-    const { name, email, plan, expiry_days } = req.body;
+    const { name, email, plan, expiry_days, password } = req.body;
     const amount = plan === 'annual' ? 299 : plan === 'quarterly' ? 79 : 29;
     const paymentId = `PAY-${Math.random().toString(36).substr(2, 9).toUpperCase()}`;
     
-    db.prepare("INSERT INTO pending_payments (id, name, email, plan, expiry_days, amount) VALUES (?, ?, ?, ?, ?, ?)").run(
-      paymentId, name, email, plan, expiry_days, amount
+    db.prepare("INSERT INTO pending_payments (id, name, email, plan, expiry_days, amount, password) VALUES (?, ?, ?, ?, ?, ?, ?)").run(
+      paymentId, name, email, plan, expiry_days, amount, password || 'password123'
     );
     
     res.json({ paymentId, amount });
@@ -513,14 +551,29 @@ async function startServer() {
     try {
       db.transaction(() => {
         db.prepare("UPDATE pending_payments SET status = 'completed' WHERE id = ?").run(paymentId);
-        db.prepare("INSERT INTO tenants (name, email, plan, expiry_date) VALUES (?, ?, ?, ?)").run(
+        const tenantInfo = db.prepare("INSERT INTO tenants (name, email, plan, expiry_date) VALUES (?, ?, ?, ?)").run(
           pending.name, pending.email, pending.plan, expiryDate.toISOString()
+        );
+        const tenantId = tenantInfo.lastInsertRowid;
+        
+        // Create default admin user for the tenant
+        db.prepare("INSERT INTO users (tenant_id, username, password, role) VALUES (?, ?, ?, ?)").run(
+          tenantId, pending.email.split('@')[0], pending.password, 'tenant_admin'
         );
       })();
       res.json({ success: true });
     } catch (e: any) {
       res.status(400).json({ error: e.message });
     }
+  });
+
+  app.post("/api/admin/tenants/:id/reset-password", (req, res) => {
+    const { id } = req.params;
+    const { newPassword } = req.body;
+    
+    // Reset the tenant_admin's password
+    db.prepare("UPDATE users SET password = ? WHERE tenant_id = ? AND role = 'tenant_admin'").run(newPassword, id);
+    res.json({ success: true });
   });
 
   app.delete("/api/admin/tenants/:id", (req, res) => {

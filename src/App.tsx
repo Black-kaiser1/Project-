@@ -46,7 +46,8 @@ import { Product, CartItem, Transaction, DashboardStats, Tenant, Notification, A
 
 export default function App() {
   const [view, setView] = useState<'login' | 'store' | 'admin'>('login');
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'pos' | 'history' | 'inventory' | 'users' | 'subscription'>('pos');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'pos' | 'history' | 'inventory' | 'users' | 'subscription' | 'settings'>('pos');
+  const [adminActiveTab, setAdminActiveTab] = useState<'tenants' | 'security'>('tenants');
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [loginData, setLoginData] = useState({ username: '', password: '' });
@@ -72,6 +73,12 @@ export default function App() {
   const [isPrinterModalOpen, setIsPrinterModalOpen] = useState(false);
   const [subscriptionHistory, setSubscriptionHistory] = useState<SubscriptionPayment[]>([]);
   const [isSubmittingPayment, setIsSubmittingPayment] = useState(false);
+  const [isChangingPassword, setIsChangingPassword] = useState(false);
+  const [passwordForm, setPasswordForm] = useState({ currentPassword: '', newPassword: '', confirmPassword: '' });
+  const [isForgotPassword, setIsForgotPassword] = useState(false);
+  const [forgotPasswordStep, setForgotPasswordStep] = useState<'identify' | 'reset'>('identify');
+  const [forgotPasswordData, setForgotPasswordData] = useState({ username: '', email: '', resetToken: '', newPassword: '', confirmPassword: '' });
+  const [isResettingPassword, setIsResettingPassword] = useState(false);
 
   // Admin State
   const [adminStats, setAdminStats] = useState<AdminStats | null>(null);
@@ -80,7 +87,7 @@ export default function App() {
   const [isConfirmModalOpen, setIsConfirmModalOpen] = useState(false);
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
   const [pendingPayment, setPendingPayment] = useState<{ paymentId: string, amount: number } | null>(null);
-  const [newTenant, setNewTenant] = useState({ name: '', email: '', plan: 'monthly', expiry_days: 30 });
+  const [newTenant, setNewTenant] = useState({ name: '', email: '', plan: 'monthly' as any, expiry_days: 30, password: 'password123' });
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [isSyncing, setIsSyncing] = useState(false);
 
@@ -205,6 +212,101 @@ export default function App() {
     setCurrentTenant(null);
     setView('login');
     setLoginData({ username: '', password: '' });
+  };
+
+  const handleChangePassword = async (e: FormEvent) => {
+    e.preventDefault();
+    if (passwordForm.newPassword !== passwordForm.confirmPassword) {
+      alert("New passwords do not match!");
+      return;
+    }
+    if (!currentUser) return;
+
+    setIsChangingPassword(true);
+    try {
+      const res = await fetch('/api/auth/change-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: currentUser.id,
+          currentPassword: passwordForm.currentPassword,
+          newPassword: passwordForm.newPassword
+        })
+      });
+
+      if (res.ok) {
+        alert("Password changed successfully!");
+        setPasswordForm({ currentPassword: '', newPassword: '', confirmPassword: '' });
+      } else {
+        const data = await res.json();
+        alert(data.error || "Failed to change password");
+      }
+    } catch (error) {
+      alert("Error changing password");
+    } finally {
+      setIsChangingPassword(false);
+    }
+  };
+
+  const handleForgotPassword = async (e: FormEvent) => {
+    e.preventDefault();
+    setIsResettingPassword(true);
+    try {
+      const res = await fetch('/api/auth/forgot-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          username: forgotPasswordData.username,
+          email: forgotPasswordData.email
+        })
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        setForgotPasswordData({ ...forgotPasswordData, resetToken: data.resetToken });
+        setForgotPasswordStep('reset');
+      } else {
+        const data = await res.json();
+        alert(data.error || "User not found");
+      }
+    } catch (error) {
+      alert("Error processing request");
+    } finally {
+      setIsResettingPassword(false);
+    }
+  };
+
+  const handleResetPassword = async (e: FormEvent) => {
+    e.preventDefault();
+    if (forgotPasswordData.newPassword !== forgotPasswordData.confirmPassword) {
+      alert("Passwords do not match!");
+      return;
+    }
+
+    setIsResettingPassword(true);
+    try {
+      const res = await fetch('/api/auth/reset-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          resetToken: forgotPasswordData.resetToken,
+          newPassword: forgotPasswordData.newPassword
+        })
+      });
+
+      if (res.ok) {
+        alert("Password reset successfully! Please login with your new password.");
+        setIsForgotPassword(false);
+        setForgotPasswordStep('identify');
+        setForgotPasswordData({ username: '', email: '', resetToken: '', newPassword: '', confirmPassword: '' });
+      } else {
+        alert("Failed to reset password");
+      }
+    } catch (error) {
+      alert("Error resetting password");
+    } finally {
+      setIsResettingPassword(false);
+    }
   };
 
   const fetchUsers = async () => {
@@ -384,10 +486,31 @@ export default function App() {
       fetchAdminStats();
       setIsPaymentModalOpen(false);
       setIsAdminModalOpen(false);
-      setNewTenant({ name: '', email: '', plan: 'monthly', expiry_days: 30 });
+      setNewTenant({ name: '', email: '', plan: 'monthly', expiry_days: 30, password: 'password123' });
       setPendingPayment(null);
       setShowSuccess(true);
       setTimeout(() => setShowSuccess(false), 3000);
+    }
+  };
+
+  const handleAdminResetTenantPassword = async (tenantId: number) => {
+    const newPassword = prompt("Enter new password for this tenant admin:");
+    if (!newPassword) return;
+
+    try {
+      const res = await fetch(`/api/admin/tenants/${tenantId}/reset-password`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ newPassword })
+      });
+
+      if (res.ok) {
+        alert("Tenant password reset successfully!");
+      } else {
+        alert("Failed to reset tenant password");
+      }
+    } catch (error) {
+      alert("Error resetting password");
     }
   };
 
@@ -693,54 +816,201 @@ export default function App() {
 
   if (view === 'login') {
     return (
-      <div className="flex flex-col h-screen max-w-md mx-auto bg-slate-900 overflow-hidden shadow-2xl p-8 justify-center">
-        <div className="text-center mb-12">
-          <div className="w-20 h-20 bg-emerald-500 rounded-3xl flex items-center justify-center mx-auto mb-6 shadow-xl shadow-emerald-500/20 rotate-3">
-            <Store size={40} className="text-white" />
+      <div className="flex flex-col h-screen max-w-md mx-auto bg-[#0f172a] overflow-hidden shadow-2xl p-8 justify-center relative">
+        {/* Background Glow */}
+        <div className="absolute top-1/4 left-1/2 -translate-x-1/2 w-64 h-64 bg-emerald-500/10 blur-[100px] rounded-full pointer-events-none" />
+        
+        <div className="bg-[#1e293b]/50 backdrop-blur-xl border border-white/5 rounded-[2.5rem] p-8 shadow-2xl relative z-10">
+          <div className="text-center mb-10">
+            <div className="w-24 h-24 bg-emerald-500 rounded-[2rem] flex items-center justify-center mx-auto mb-6 shadow-2xl shadow-emerald-500/20 relative overflow-hidden group">
+              <div className="absolute inset-0 bg-gradient-to-br from-white/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
+              <div className="w-12 h-12 border-4 border-white rounded-lg flex items-center justify-center">
+                <div className="w-6 h-6 bg-white rounded-sm" />
+              </div>
+            </div>
+            <h1 className="text-4xl font-black text-white mb-2 tracking-tight">
+              Lucid<span className="text-emerald-400">Hub</span>
+            </h1>
+            <p className="text-slate-400 font-bold uppercase tracking-[0.2em] text-[10px] opacity-60">Enterprise SaaS POS Terminal</p>
           </div>
-          <h1 className="text-3xl font-black text-white mb-2">Lucid Hub POS</h1>
-          <p className="text-emerald-400 font-bold uppercase tracking-widest text-xs">SaaS Multi-Tenant Portal</p>
+
+          {isForgotPassword ? (
+            <div className="space-y-6">
+              <div className="flex items-center gap-2 mb-4">
+                <button 
+                  onClick={() => {
+                    setIsForgotPassword(false);
+                    setForgotPasswordStep('identify');
+                  }}
+                  className="p-2 text-slate-400 hover:text-white transition-colors"
+                >
+                  <X size={20} />
+                </button>
+                <h2 className="text-xl font-black text-white">Reset Password</h2>
+              </div>
+
+              {forgotPasswordStep === 'identify' ? (
+                <form onSubmit={handleForgotPassword} className="space-y-6">
+                  <p className="text-slate-400 text-xs font-medium leading-relaxed">
+                    Enter your username and registered email address to verify your identity.
+                  </p>
+                  <div className="space-y-2">
+                    <label className="text-slate-500 text-[10px] font-black uppercase tracking-widest ml-1">Username</label>
+                    <input 
+                      type="text"
+                      required
+                      placeholder="Your username"
+                      className="w-full bg-[#0f172a]/50 border border-white/5 p-4 rounded-2xl text-white placeholder:text-slate-600 focus:outline-none focus:border-emerald-500/50 transition-all font-medium"
+                      value={forgotPasswordData.username}
+                      onChange={(e) => setForgotPasswordData({...forgotPasswordData, username: e.target.value})}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-slate-500 text-[10px] font-black uppercase tracking-widest ml-1">Email Address</label>
+                    <input 
+                      type="email"
+                      required
+                      placeholder="your@email.com"
+                      className="w-full bg-[#0f172a]/50 border border-white/5 p-4 rounded-2xl text-white placeholder:text-slate-600 focus:outline-none focus:border-emerald-500/50 transition-all font-medium"
+                      value={forgotPasswordData.email}
+                      onChange={(e) => setForgotPasswordData({...forgotPasswordData, email: e.target.value})}
+                    />
+                  </div>
+                  <motion.button
+                    whileHover={{ scale: 1.02 }}
+                    whileTap={{ scale: 0.98 }}
+                    type="submit"
+                    disabled={isResettingPassword}
+                    className="w-full bg-emerald-500 text-white p-5 rounded-2xl font-black shadow-xl shadow-emerald-500/20 transition-all flex items-center justify-center gap-3"
+                  >
+                    {isResettingPassword ? <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : "Verify Identity"}
+                  </motion.button>
+                </form>
+              ) : (
+                <form onSubmit={handleResetPassword} className="space-y-6">
+                  <p className="text-emerald-400 text-xs font-bold">
+                    Identity verified! Please set your new password.
+                  </p>
+                  <div className="space-y-2">
+                    <label className="text-slate-500 text-[10px] font-black uppercase tracking-widest ml-1">New Password</label>
+                    <input 
+                      type="password"
+                      required
+                      placeholder="••••••••"
+                      className="w-full bg-[#0f172a]/50 border border-white/5 p-4 rounded-2xl text-white placeholder:text-slate-600 focus:outline-none focus:border-emerald-500/50 transition-all font-medium"
+                      value={forgotPasswordData.newPassword}
+                      onChange={(e) => setForgotPasswordData({...forgotPasswordData, newPassword: e.target.value})}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-slate-500 text-[10px] font-black uppercase tracking-widest ml-1">Confirm Password</label>
+                    <input 
+                      type="password"
+                      required
+                      placeholder="••••••••"
+                      className="w-full bg-[#0f172a]/50 border border-white/5 p-4 rounded-2xl text-white placeholder:text-slate-600 focus:outline-none focus:border-emerald-500/50 transition-all font-medium"
+                      value={forgotPasswordData.confirmPassword}
+                      onChange={(e) => setForgotPasswordData({...forgotPasswordData, confirmPassword: e.target.value})}
+                    />
+                  </div>
+                  <motion.button
+                    whileHover={{ scale: 1.02 }}
+                    whileTap={{ scale: 0.98 }}
+                    type="submit"
+                    disabled={isResettingPassword}
+                    className="w-full bg-emerald-500 text-white p-5 rounded-2xl font-black shadow-xl shadow-emerald-500/20 transition-all flex items-center justify-center gap-3"
+                  >
+                    {isResettingPassword ? <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : "Reset Password"}
+                  </motion.button>
+                </form>
+              )}
+            </div>
+          ) : (
+            <form onSubmit={handleLogin} className="space-y-6">
+              <div className="space-y-2">
+                <label className="text-slate-500 text-[10px] font-black uppercase tracking-widest ml-1">Username</label>
+                <div className="relative group">
+                  <div className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500 group-focus-within:text-emerald-400 transition-colors">
+                    <Users size={18} />
+                  </div>
+                  <input 
+                    type="text"
+                    required
+                    placeholder="Enter your username"
+                    className="w-full bg-[#0f172a]/50 border border-white/5 p-4 pl-12 rounded-2xl text-white placeholder:text-slate-600 focus:outline-none focus:border-emerald-500/50 focus:ring-4 focus:ring-emerald-500/5 transition-all font-medium"
+                    value={loginData.username}
+                    onChange={(e) => setLoginData({...loginData, username: e.target.value})}
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <div className="flex justify-between items-center ml-1">
+                  <label className="text-slate-500 text-[10px] font-black uppercase tracking-widest">Password</label>
+                  <button 
+                    type="button"
+                    onClick={() => setIsForgotPassword(true)}
+                    className="text-[10px] font-black text-emerald-400 uppercase tracking-widest hover:underline"
+                  >
+                    Forgot?
+                  </button>
+                </div>
+                <div className="relative group">
+                  <div className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500 group-focus-within:text-emerald-400 transition-colors">
+                    <Lock size={18} />
+                  </div>
+                  <input 
+                    type="password"
+                    required
+                    placeholder="••••••••"
+                    className="w-full bg-[#0f172a]/50 border border-white/5 p-4 pl-12 rounded-2xl text-white placeholder:text-slate-600 focus:outline-none focus:border-emerald-500/50 focus:ring-4 focus:ring-emerald-500/5 transition-all font-medium"
+                    value={loginData.password}
+                    onChange={(e) => setLoginData({...loginData, password: e.target.value})}
+                  />
+                </div>
+              </div>
+
+              <motion.button
+                whileHover={{ scale: 1.02, translateY: -2 }}
+                whileTap={{ scale: 0.98 }}
+                type="submit"
+                disabled={isLoggingIn}
+                className={`w-full bg-emerald-500 text-white p-5 rounded-2xl font-black shadow-xl shadow-emerald-500/20 transition-all mt-4 flex items-center justify-center gap-3 group ${isLoggingIn ? 'opacity-50 cursor-not-allowed' : ''}`}
+              >
+                {isLoggingIn ? (
+                  <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                ) : (
+                  <>
+                    <span>Secure Access</span>
+                    <ChevronRight size={20} className="group-hover:translate-x-1 transition-transform" />
+                  </>
+                )}
+              </motion.button>
+            </form>
+          )}
+
+          <div className="mt-10 pt-8 border-t border-white/5 text-center">
+            <p className="text-[9px] uppercase tracking-[0.3em] font-black text-slate-600">
+              Protected by Lucid Security Engine
+            </p>
+          </div>
         </div>
 
-        <form onSubmit={handleLogin} className="space-y-4">
-          <div>
-            <label className="text-slate-400 text-[10px] font-bold uppercase tracking-widest mb-2 block">Username</label>
-            <input 
-              type="text"
-              required
-              className="w-full bg-slate-800 border border-slate-700 p-4 rounded-2xl text-white focus:outline-none focus:border-emerald-500 transition-all"
-              value={loginData.username}
-              onChange={(e) => setLoginData({...loginData, username: e.target.value})}
-            />
-          </div>
-          <div>
-            <label className="text-slate-400 text-[10px] font-bold uppercase tracking-widest mb-2 block">Password</label>
-            <input 
-              type="password"
-              required
-              className="w-full bg-slate-800 border border-slate-700 p-4 rounded-2xl text-white focus:outline-none focus:border-emerald-500 transition-all"
-              value={loginData.password}
-              onChange={(e) => setLoginData({...loginData, password: e.target.value})}
-            />
-          </div>
-          <motion.button
-            whileHover={{ scale: 1.02 }}
-            whileTap={{ scale: 0.98 }}
-            type="submit"
-            disabled={isLoggingIn}
-            className={`w-full bg-emerald-500 text-white p-5 rounded-2xl font-black shadow-lg shadow-emerald-500/20 transition-all mt-4 ${isLoggingIn ? 'opacity-50 cursor-not-allowed' : ''}`}
+        {/* Quick Access for Demo */}
+        <div className="mt-8 flex justify-center gap-4">
+          <button 
+            onClick={() => setLoginData({ username: 'admin', password: 'admin123' })}
+            className="text-[10px] font-black uppercase tracking-widest text-slate-500 hover:text-emerald-400 transition-colors bg-white/5 px-3 py-2 rounded-xl border border-white/5"
           >
-            {isLoggingIn ? 'Logging in...' : 'Login to Store'}
-          </motion.button>
-        </form>
-
-        <p className="mt-8 text-center text-slate-500 text-[9px] uppercase tracking-widest font-bold">
-          Demo: admin / admin123
-        </p>
-
-        <p className="mt-4 text-center text-slate-600 text-[10px] uppercase tracking-widest font-bold">
-          Powered by Lucid IT Hub
-        </p>
+            Super Admin Demo
+          </button>
+          <button 
+            onClick={() => setLoginData({ username: 'demo', password: 'password123' })}
+            className="text-[10px] font-black uppercase tracking-widest text-slate-500 hover:text-emerald-400 transition-colors bg-white/5 px-3 py-2 rounded-xl border border-white/5"
+          >
+            Staff Demo
+          </button>
+        </div>
       </div>
     );
   }
@@ -762,100 +1032,209 @@ export default function App() {
         </header>
 
         <main className="flex-1 overflow-y-auto no-scrollbar p-6 space-y-6">
-          {adminStats && (
-            <div className="grid grid-cols-2 gap-4">
-              <AdminStatCard icon={<Users size={20} />} label="Total Tenants" value={adminStats.totalTenants} />
-              <AdminStatCard icon={<TrendingUp size={20} />} label="Total Revenue" value={`$${adminStats.totalRevenue.toFixed(0)}`} />
-              <AdminStatCard icon={<ShoppingCart size={20} />} label="Transactions" value={adminStats.totalTransactions} />
-              <AdminStatCard icon={<CheckCircle2 size={20} />} label="Active Stores" value={adminStats.activeTenants} />
-            </div>
-          )}
+          {/* Admin Tabs */}
+          <div className="flex bg-slate-200 p-1 rounded-2xl">
+            <button 
+              onClick={() => setAdminActiveTab('tenants')}
+              className={`flex-1 py-2 rounded-xl text-xs font-black uppercase tracking-widest transition-all ${adminActiveTab === 'tenants' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500'}`}
+            >
+              Tenants
+            </button>
+            <button 
+              onClick={() => setAdminActiveTab('security')}
+              className={`flex-1 py-2 rounded-xl text-xs font-black uppercase tracking-widest transition-all ${adminActiveTab === 'security' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500'}`}
+            >
+              Security
+            </button>
+          </div>
 
-          {pendingSubscriptions.length > 0 && (
-            <div className="space-y-4">
-              <h2 className="text-lg font-black text-slate-900 flex items-center gap-2">
-                Pending Subscriptions
-                <span className="bg-amber-500 text-white text-[10px] px-2 py-0.5 rounded-full">{pendingSubscriptions.length}</span>
-              </h2>
-              <div className="space-y-3">
-                {pendingSubscriptions.map(sub => (
-                  <div key={sub.id} className="bg-white p-4 rounded-2xl border border-amber-100 shadow-sm space-y-3">
-                    <div className="flex justify-between items-start">
-                      <div>
-                        <h3 className="font-bold text-slate-900">{sub.tenant_name}</h3>
-                        <p className="text-[10px] text-slate-500 uppercase font-black tracking-widest">{sub.plan} Plan - {sub.amount} GH₵</p>
+          {adminActiveTab === 'tenants' ? (
+            <>
+              {adminStats && (
+                <div className="grid grid-cols-2 gap-4">
+                  <AdminStatCard icon={<Users size={20} />} label="Total Tenants" value={adminStats.totalTenants} />
+                  <AdminStatCard icon={<TrendingUp size={20} />} label="Total Revenue" value={`$${adminStats.totalRevenue.toFixed(0)}`} />
+                  <AdminStatCard icon={<ShoppingCart size={20} />} label="Transactions" value={adminStats.totalTransactions} />
+                  <AdminStatCard icon={<CheckCircle2 size={20} />} label="Active Stores" value={adminStats.activeTenants} />
+                </div>
+              )}
+
+              {pendingSubscriptions.length > 0 && (
+                <div className="space-y-4">
+                  <h2 className="text-lg font-black text-slate-900 flex items-center gap-2">
+                    Pending Subscriptions
+                    <span className="bg-amber-500 text-white text-[10px] px-2 py-0.5 rounded-full">{pendingSubscriptions.length}</span>
+                  </h2>
+                  <div className="space-y-3">
+                    {pendingSubscriptions.map(sub => (
+                      <div key={sub.id} className="bg-white p-4 rounded-2xl border border-amber-100 shadow-sm space-y-3">
+                        <div className="flex justify-between items-start">
+                          <div>
+                            <h3 className="font-bold text-slate-900">{sub.tenant_name}</h3>
+                            <p className="text-[10px] text-slate-500 uppercase font-black tracking-widest">{sub.plan} Plan - {sub.amount} GH₵</p>
+                          </div>
+                          <span className="bg-amber-100 text-amber-600 text-[9px] font-black px-2 py-0.5 rounded-full uppercase">Pending</span>
+                        </div>
+                        <div className="bg-slate-50 p-3 rounded-xl">
+                          <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mb-1">Reference</p>
+                          <p className="text-xs font-mono font-bold text-slate-700">{sub.reference}</p>
+                        </div>
+                        <div className="flex gap-2">
+                          <button 
+                            onClick={() => handleApproveSubscription(sub.id)}
+                            className="flex-1 bg-emerald-500 text-white text-xs font-black py-2 rounded-xl shadow-lg shadow-emerald-500/20"
+                          >
+                            Approve
+                          </button>
+                          <button 
+                            onClick={() => handleRejectSubscription(sub.id)}
+                            className="flex-1 bg-slate-100 text-slate-500 text-xs font-black py-2 rounded-xl"
+                          >
+                            Reject
+                          </button>
+                        </div>
                       </div>
-                      <span className="bg-amber-100 text-amber-600 text-[9px] font-black px-2 py-0.5 rounded-full uppercase">Pending</span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div className="bg-slate-900 rounded-3xl p-6 text-white shadow-xl relative overflow-hidden">
+                <div className="absolute top-0 right-0 w-32 h-32 bg-emerald-500/10 blur-3xl rounded-full -mr-16 -mt-16" />
+                <h3 className="text-xs font-black uppercase tracking-[0.2em] text-slate-400 mb-4">System Health</h3>
+                <div className="space-y-4">
+                  <div className="flex justify-between items-center">
+                    <div className="flex items-center gap-3">
+                      <div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse" />
+                      <span className="text-sm font-bold">API Gateway</span>
                     </div>
-                    <div className="bg-slate-50 p-3 rounded-xl">
-                      <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mb-1">Reference</p>
-                      <p className="text-xs font-mono font-bold text-slate-700">{sub.reference}</p>
+                    <span className="text-[10px] font-black text-emerald-400 uppercase">Operational</span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <div className="flex items-center gap-3">
+                      <div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse" />
+                      <span className="text-sm font-bold">Database Cluster</span>
                     </div>
-                    <div className="flex gap-2">
+                    <span className="text-[10px] font-black text-emerald-400 uppercase">Operational</span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <div className="flex items-center gap-3">
+                      <div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse" />
+                      <span className="text-sm font-bold">Storage Engine</span>
+                    </div>
+                    <span className="text-[10px] font-black text-emerald-400 uppercase">Operational</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex justify-between items-center">
+                <h2 className="text-lg font-black text-slate-900">Manage Tenants</h2>
+                <button 
+                  onClick={() => setIsAdminModalOpen(true)}
+                  className="p-2 bg-emerald-500 text-white rounded-xl shadow-lg shadow-emerald-500/20 hover:bg-emerald-600 transition-all"
+                >
+                  <PlusCircle size={20} />
+                </button>
+              </div>
+
+              <div className="space-y-3">
+                {tenants.map(tenant => (
+                  <div key={tenant.id} className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm flex justify-between items-center">
+                    <div className="flex-1">
+                      <h3 className="font-bold text-slate-900">{tenant.name}</h3>
+                      <p className="text-[10px] text-slate-500">{tenant.email}</p>
+                      <div className="flex items-center gap-2 mt-1">
+                        <span className="text-[9px] font-black uppercase bg-slate-100 px-1.5 py-0.5 rounded text-slate-500">{tenant.plan}</span>
+                        <span className={`text-[9px] font-black uppercase px-1.5 py-0.5 rounded ${
+                          new Date(tenant.expiry_date) < new Date() ? 'bg-red-100 text-red-500' : 'bg-emerald-100 text-emerald-500'
+                        }`}>
+                          {new Date(tenant.expiry_date) < new Date() ? 'Expired' : 'Active'}
+                        </span>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
                       <button 
-                        onClick={() => handleApproveSubscription(sub.id)}
-                        className="flex-1 bg-emerald-500 text-white text-xs font-black py-2 rounded-xl shadow-lg shadow-emerald-500/20"
+                        onClick={() => handleAdminResetTenantPassword(tenant.id)}
+                        title="Reset Admin Password"
+                        className="p-2 bg-slate-50 text-slate-400 hover:text-amber-500 transition-colors rounded-xl"
                       >
-                        Approve
+                        <ShieldCheck size={18} />
                       </button>
                       <button 
-                        onClick={() => handleRejectSubscription(sub.id)}
-                        className="flex-1 bg-slate-100 text-slate-500 text-xs font-black py-2 rounded-xl"
+                        onClick={() => {
+                          setCurrentTenant(tenant);
+                          setView('store');
+                        }}
+                        className="p-2 bg-slate-50 text-slate-400 hover:text-emerald-500 transition-colors rounded-xl"
                       >
-                        Reject
+                        <Settings size={18} />
+                      </button>
+                      <button 
+                        onClick={() => handleDeleteTenant(tenant.id)}
+                        className="p-2 bg-slate-50 text-slate-400 hover:text-red-500 transition-colors rounded-xl"
+                      >
+                        <Trash size={18} />
                       </button>
                     </div>
                   </div>
                 ))}
               </div>
-            </div>
-          )}
-
-          <div className="flex justify-between items-center">
-            <h2 className="text-lg font-black text-slate-900">Manage Tenants</h2>
-            <button 
-              onClick={() => setIsAdminModalOpen(true)}
-              className="p-2 bg-emerald-500 text-white rounded-xl shadow-lg shadow-emerald-500/20 hover:bg-emerald-600 transition-all"
-            >
-              <PlusCircle size={20} />
-            </button>
-          </div>
-
-          <div className="space-y-3">
-            {tenants.map(tenant => (
-              <div key={tenant.id} className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm flex justify-between items-center">
-                <div className="flex-1">
-                  <h3 className="font-bold text-slate-900">{tenant.name}</h3>
-                  <p className="text-[10px] text-slate-500">{tenant.email}</p>
-                  <div className="flex items-center gap-2 mt-1">
-                    <span className="text-[9px] font-black uppercase bg-slate-100 px-1.5 py-0.5 rounded text-slate-500">{tenant.plan}</span>
-                    <span className={`text-[9px] font-black uppercase px-1.5 py-0.5 rounded ${
-                      new Date(tenant.expiry_date) < new Date() ? 'bg-red-100 text-red-500' : 'bg-emerald-100 text-emerald-500'
-                    }`}>
-                      {new Date(tenant.expiry_date) < new Date() ? 'Expired' : 'Active'}
-                    </span>
+            </>
+          ) : (
+            <div className="space-y-6">
+              <div className="bg-white p-6 rounded-[2.5rem] border border-slate-100 shadow-sm">
+                <div className="flex items-center gap-4 mb-8">
+                  <div className="w-12 h-12 bg-slate-100 rounded-2xl flex items-center justify-center text-slate-500">
+                    <Lock size={24} />
+                  </div>
+                  <div>
+                    <h2 className="text-lg font-black text-slate-900">Admin Security</h2>
+                    <p className="text-xs text-slate-500 font-bold uppercase tracking-widest">Update super admin password</p>
                   </div>
                 </div>
-                <div className="flex items-center gap-2">
+
+                <form onSubmit={handleChangePassword} className="space-y-4">
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Current Password</label>
+                    <input 
+                      type="password"
+                      required
+                      className="w-full bg-slate-50 border border-slate-100 p-4 rounded-2xl text-sm font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
+                      value={passwordForm.currentPassword}
+                      onChange={e => setPasswordForm({...passwordForm, currentPassword: e.target.value})}
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">New Password</label>
+                    <input 
+                      type="password"
+                      required
+                      className="w-full bg-slate-50 border border-slate-100 p-4 rounded-2xl text-sm font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
+                      value={passwordForm.newPassword}
+                      onChange={e => setPasswordForm({...passwordForm, newPassword: e.target.value})}
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Confirm New Password</label>
+                    <input 
+                      type="password"
+                      required
+                      className="w-full bg-slate-50 border border-slate-100 p-4 rounded-2xl text-sm font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
+                      value={passwordForm.confirmPassword}
+                      onChange={e => setPasswordForm({...passwordForm, confirmPassword: e.target.value})}
+                    />
+                  </div>
                   <button 
-                    onClick={() => {
-                      setCurrentTenant(tenant);
-                      setView('store');
-                    }}
-                    className="p-2 bg-slate-50 text-slate-400 hover:text-emerald-500 transition-colors rounded-xl"
+                    type="submit"
+                    disabled={isChangingPassword}
+                    className="w-full bg-slate-900 text-white py-4 rounded-2xl font-black text-sm shadow-xl active:scale-95 transition-all disabled:opacity-50 mt-4"
                   >
-                    <Settings size={18} />
+                    {isChangingPassword ? 'Updating...' : 'Update Admin Password'}
                   </button>
-                  <button 
-                    onClick={() => handleDeleteTenant(tenant.id)}
-                    className="p-2 bg-slate-50 text-slate-400 hover:text-red-500 transition-colors rounded-xl"
-                  >
-                    <Trash size={18} />
-                  </button>
-                </div>
+                </form>
               </div>
-            ))}
-          </div>
+            </div>
+          )}
         </main>
 
         {/* Create Tenant Modal */}
@@ -883,6 +1262,7 @@ export default function App() {
                 <div className="space-y-4">
                   <AdminInput label="Store Name" value={newTenant.name} onChange={v => setNewTenant({...newTenant, name: v})} placeholder="e.g. Lucid Coffee" />
                   <AdminInput label="Owner Email" value={newTenant.email} onChange={v => setNewTenant({...newTenant, email: v})} placeholder="owner@example.com" />
+                  <AdminInput label="Initial Password" value={newTenant.password} onChange={v => setNewTenant({...newTenant, password: v})} placeholder="Set initial password" />
                   <div className="grid grid-cols-2 gap-4">
                     <div className="space-y-1">
                       <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Initial Plan</label>
@@ -1459,7 +1839,7 @@ export default function App() {
                   <h2 className="text-lg font-black text-slate-900">User Management</h2>
                   <button 
                     onClick={() => {
-                      setEditingUser({ role: 'staff' });
+                      setEditingUser({ role: 'staff', email: '' });
                       setIsUserModalOpen(true);
                     }}
                     className="p-2 bg-emerald-500 text-white rounded-xl shadow-lg shadow-emerald-500/20"
@@ -1473,7 +1853,8 @@ export default function App() {
                     <div key={user.id} className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm flex justify-between items-center">
                       <div>
                         <p className="font-bold text-slate-900">{user.username}</p>
-                        <p className="text-[10px] text-slate-500 uppercase font-black tracking-widest">{user.role}</p>
+                        <p className="text-[10px] text-slate-400 font-medium">{user.email}</p>
+                        <p className="text-[10px] text-slate-500 uppercase font-black tracking-widest mt-1">{user.role}</p>
                       </div>
                       <div className="flex gap-2">
                         <button 
@@ -1584,6 +1965,72 @@ export default function App() {
                 </div>
               </div>
             )}
+            {activeTab === 'settings' && (
+              <div className="space-y-6">
+                <div className="bg-white p-6 rounded-[2.5rem] border border-slate-100 shadow-sm">
+                  <div className="flex items-center gap-4 mb-8">
+                    <div className="w-12 h-12 bg-slate-100 rounded-2xl flex items-center justify-center text-slate-500">
+                      <Lock size={24} />
+                    </div>
+                    <div>
+                      <h2 className="text-lg font-black text-slate-900">Security Settings</h2>
+                      <p className="text-xs text-slate-500 font-bold uppercase tracking-widest">Update your password</p>
+                    </div>
+                  </div>
+
+                  <form onSubmit={handleChangePassword} className="space-y-4">
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Current Password</label>
+                      <input 
+                        type="password"
+                        required
+                        className="w-full bg-slate-50 border border-slate-100 p-4 rounded-2xl text-sm font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
+                        value={passwordForm.currentPassword}
+                        onChange={e => setPasswordForm({...passwordForm, currentPassword: e.target.value})}
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">New Password</label>
+                      <input 
+                        type="password"
+                        required
+                        className="w-full bg-slate-50 border border-slate-100 p-4 rounded-2xl text-sm font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
+                        value={passwordForm.newPassword}
+                        onChange={e => setPasswordForm({...passwordForm, newPassword: e.target.value})}
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Confirm New Password</label>
+                      <input 
+                        type="password"
+                        required
+                        className="w-full bg-slate-50 border border-slate-100 p-4 rounded-2xl text-sm font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
+                        value={passwordForm.confirmPassword}
+                        onChange={e => setPasswordForm({...passwordForm, confirmPassword: e.target.value})}
+                      />
+                    </div>
+                    <button 
+                      type="submit"
+                      disabled={isChangingPassword}
+                      className="w-full bg-slate-900 text-white py-4 rounded-2xl font-black text-sm shadow-xl active:scale-95 transition-all disabled:opacity-50 mt-4"
+                    >
+                      {isChangingPassword ? 'Updating...' : 'Update Password'}
+                    </button>
+                  </form>
+                </div>
+
+                <div className="bg-red-50 p-6 rounded-[2.5rem] border border-red-100">
+                  <h3 className="text-sm font-black text-red-600 uppercase tracking-widest mb-2">Danger Zone</h3>
+                  <p className="text-xs text-red-500/70 font-bold mb-4">Once you logout, you will need your credentials to access the terminal again.</p>
+                  <button 
+                    onClick={handleLogout}
+                    className="w-full bg-red-500 text-white py-4 rounded-2xl font-black text-sm shadow-xl shadow-red-500/20 active:scale-95 transition-all"
+                  >
+                    Logout from Terminal
+                  </button>
+                </div>
+              </div>
+            )}
           </>
         )}
       </main>
@@ -1594,12 +2041,7 @@ export default function App() {
         <NavButton active={activeTab === 'pos'} onClick={() => setActiveTab('pos')} icon={<ShoppingCart size={20} />} label="POS" />
         <NavButton active={activeTab === 'history'} onClick={() => setActiveTab('history')} icon={<History size={20} />} label="History" />
         <NavButton active={activeTab === 'inventory'} onClick={() => setActiveTab('inventory')} icon={<Package size={20} />} label="Stock" />
-        {currentUser?.role === 'tenant_admin' && (
-          <>
-            <NavButton active={activeTab === 'users'} onClick={() => setActiveTab('users')} icon={<Users size={20} />} label="Users" />
-            <NavButton active={activeTab === 'subscription'} onClick={() => setActiveTab('subscription')} icon={<CreditCard size={20} />} label="Plan" />
-          </>
-        )}
+        <NavButton active={activeTab === 'settings'} onClick={() => setActiveTab('settings')} icon={<Settings size={20} />} label="Settings" />
       </nav>
 
       {/* Notifications Modal */}
@@ -1926,6 +2368,16 @@ export default function App() {
                     className="w-full bg-slate-50 border border-slate-200 p-4 rounded-2xl text-slate-900 focus:outline-none focus:border-emerald-500 transition-all"
                     value={editingUser?.username || ''}
                     onChange={(e) => setEditingUser({...editingUser, username: e.target.value})}
+                  />
+                </div>
+                <div>
+                  <label className="text-slate-400 text-[10px] font-bold uppercase tracking-widest mb-2 block">Email Address</label>
+                  <input 
+                    type="email"
+                    required
+                    className="w-full bg-slate-50 border border-slate-200 p-4 rounded-2xl text-slate-900 focus:outline-none focus:border-emerald-500 transition-all"
+                    value={editingUser?.email || ''}
+                    onChange={(e) => setEditingUser({...editingUser, email: e.target.value})}
                   />
                 </div>
                 <div>

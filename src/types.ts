@@ -72,6 +72,7 @@ export interface User {
   id: number;
   tenant_id: number | null;
   username: string;
+  email: string;
   role: 'super_admin' | 'tenant_admin' | 'staff';
 }
 
