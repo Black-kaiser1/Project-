@@ -613,9 +613,21 @@ export default function App() {
 
   const fetchProducts = async () => {
     if (!currentTenant) return;
-    const res = await fetch(`/api/products?tenantId=${currentTenant.id}`);
-    const data = await res.json();
-    setProducts(data);
+    try {
+      const res = await fetch(`/api/products?tenantId=${currentTenant.id}`);
+      if (res.ok) {
+        const data = await res.json();
+        setProducts(data);
+        // Cache products for offline use
+        localStorage.setItem(`cached_products_${currentTenant.id}`, JSON.stringify(data));
+      }
+    } catch (error) {
+      console.log('Fetching products failed, loading from cache...', error);
+      const cached = localStorage.getItem(`cached_products_${currentTenant.id}`);
+      if (cached) {
+        setProducts(JSON.parse(cached));
+      }
+    }
   };
 
   const fetchStats = async () => {
@@ -718,6 +730,39 @@ export default function App() {
     return cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
   }, [cart]);
 
+  const processOfflineTransaction = (txData: any) => {
+    if (!currentTenant) return;
+    const offlineData = localStorage.getItem(`offline_tx_${currentTenant.id}`);
+    const pending = offlineData ? JSON.parse(offlineData) : [];
+    pending.push(txData);
+    localStorage.setItem(`offline_tx_${currentTenant.id}`, JSON.stringify(pending));
+
+    // Optimistic UI update
+    const optimisticTx = {
+      id: Date.now(),
+      total: cartTotal,
+      items: [...cart],
+      timestamp: new Date().toISOString(),
+      tenant_id: currentTenant.id,
+      isOffline: true
+    };
+    
+    setTransactions([optimisticTx, ...transactions]);
+    setLastTransaction(optimisticTx);
+    setCart([]);
+    setIsCartOpen(false);
+    setShowSuccess(true);
+    
+    // Update local stock optimistically
+    setProducts(prev => prev.map(p => {
+      const cartItem = cart.find(item => item.id === p.id);
+      if (cartItem) return { ...p, stock: p.stock - cartItem.quantity };
+      return p;
+    }));
+
+    setTimeout(() => setShowSuccess(false), 5000);
+  };
+
   const handleCheckout = async () => {
     if (cart.length === 0 || !currentTenant) return;
 
@@ -728,36 +773,7 @@ export default function App() {
     };
 
     if (!isOnline) {
-      // Offline Mode
-      const offlineData = localStorage.getItem(`offline_tx_${currentTenant.id}`);
-      const pending = offlineData ? JSON.parse(offlineData) : [];
-      pending.push(txData);
-      localStorage.setItem(`offline_tx_${currentTenant.id}`, JSON.stringify(pending));
-
-      // Optimistic UI update
-      const optimisticTx = {
-        id: Date.now(), // Temporary ID
-        total: cartTotal,
-        items: [...cart],
-        timestamp: new Date().toISOString(),
-        tenant_id: currentTenant.id,
-        isOffline: true
-      };
-      
-      setTransactions([optimisticTx, ...transactions]);
-      setLastTransaction(optimisticTx);
-      setCart([]);
-      setIsCartOpen(false);
-      setShowSuccess(true);
-      
-      // Update local stock optimistically
-      setProducts(prev => prev.map(p => {
-        const cartItem = cart.find(item => item.id === p.id);
-        if (cartItem) return { ...p, stock: p.stock - cartItem.quantity };
-        return p;
-      }));
-
-      setTimeout(() => setShowSuccess(false), 5000);
+      processOfflineTransaction(txData);
       return;
     }
 
@@ -788,41 +804,17 @@ export default function App() {
         setTimeout(() => setShowSuccess(false), 5000);
       } else {
         const err = await res.json();
-        alert(err.error);
+        if (res.status === 403) {
+          alert(err.error); // Subscription expired
+        } else {
+          // Other errors might be connection related, fallback to offline
+          processOfflineTransaction(txData);
+        }
       }
     } catch (error) {
-      console.error('Checkout failed', error);
-      // Fallback to offline if request fails
+      console.error('Checkout failed, falling back to offline', error);
       setIsOnline(false);
-      
-      // Manually trigger offline logic since state update is async
-      const offlineData = localStorage.getItem(`offline_tx_${currentTenant.id}`);
-      const pending = offlineData ? JSON.parse(offlineData) : [];
-      pending.push(txData);
-      localStorage.setItem(`offline_tx_${currentTenant.id}`, JSON.stringify(pending));
-
-      const optimisticTx = {
-        id: Date.now(),
-        total: cartTotal,
-        items: [...cart],
-        timestamp: new Date().toISOString(),
-        tenant_id: currentTenant.id,
-        isOffline: true
-      };
-      
-      setTransactions([optimisticTx, ...transactions]);
-      setLastTransaction(optimisticTx);
-      setCart([]);
-      setIsCartOpen(false);
-      setShowSuccess(true);
-      
-      setProducts(prev => prev.map(p => {
-        const cartItem = cart.find(item => item.id === p.id);
-        if (cartItem) return { ...p, stock: p.stock - cartItem.quantity };
-        return p;
-      }));
-
-      setTimeout(() => setShowSuccess(false), 5000);
+      processOfflineTransaction(txData);
     }
   };
 
@@ -1484,18 +1476,30 @@ export default function App() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          {!isOnline && (
-            <div className="flex items-center gap-1 bg-red-50 text-red-600 px-2 py-1 rounded-lg text-[9px] font-black uppercase border border-red-100 animate-pulse">
-              <WifiOff size={12} />
-              <span>Offline</span>
-            </div>
-          )}
-          {isSyncing && (
-            <div className="flex items-center gap-1 bg-emerald-50 text-emerald-600 px-2 py-1 rounded-lg text-[9px] font-black uppercase border border-emerald-100">
-              <CloudUpload size={12} className="animate-bounce" />
-              <span>Syncing</span>
-            </div>
-          )}
+          <AnimatePresence>
+            {!isOnline && (
+              <motion.div 
+                initial={{ opacity: 0, scale: 0.8 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.8 }}
+                className="flex items-center gap-1.5 bg-red-50 text-red-600 px-3 py-1.5 rounded-xl text-[10px] font-black uppercase border border-red-100 shadow-sm shadow-red-500/5"
+              >
+                <WifiOff size={14} className="animate-pulse" />
+                <span>Offline Mode</span>
+              </motion.div>
+            )}
+            {isSyncing && (
+              <motion.div 
+                initial={{ opacity: 0, scale: 0.8 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.8 }}
+                className="flex items-center gap-1.5 bg-emerald-50 text-emerald-600 px-3 py-1.5 rounded-xl text-[10px] font-black uppercase border border-emerald-100 shadow-sm shadow-emerald-500/5"
+              >
+                <CloudUpload size={14} className="animate-bounce" />
+                <span>Syncing Data</span>
+              </motion.div>
+            )}
+          </AnimatePresence>
           {currentUser?.role !== 'staff' && (
             <button 
               onClick={() => {
@@ -1569,30 +1573,79 @@ export default function App() {
         ) : (
           <>
             {activeTab === 'dashboard' && currentUser?.role !== 'staff' && (
-              <div className="space-y-6">
-                {/* Real-time Sales Overview */}
-                <div className="grid grid-cols-3 gap-3">
-                  <div className="bg-white p-3 rounded-2xl shadow-sm border border-slate-100">
-                    <p className="text-[9px] font-bold text-slate-400 uppercase tracking-wider mb-1">Daily</p>
-                    <p className="text-sm font-black text-slate-900">₵{detailedStats?.totalSales.daily.toFixed(2) || '0.00'}</p>
+              <div className="space-y-6 pb-20">
+                {/* Header Section */}
+                <div className="flex justify-between items-end">
+                  <div>
+                    <p className="text-[10px] font-black text-emerald-500 uppercase tracking-[0.2em] mb-1">Overview</p>
+                    <h2 className="text-2xl font-black text-slate-900">Sales Dashboard</h2>
                   </div>
-                  <div className="bg-white p-3 rounded-2xl shadow-sm border border-slate-100">
-                    <p className="text-[9px] font-bold text-slate-400 uppercase tracking-wider mb-1">Weekly</p>
-                    <p className="text-sm font-black text-slate-900">₵{detailedStats?.totalSales.weekly.toFixed(2) || '0.00'}</p>
+                  <div className="bg-white p-2 rounded-xl shadow-sm border border-slate-100 flex items-center gap-2">
+                    <div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse" />
+                    <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Live</span>
                   </div>
-                  <div className="bg-white p-3 rounded-2xl shadow-sm border border-slate-100">
-                    <p className="text-[9px] font-bold text-slate-400 uppercase tracking-wider mb-1">Monthly</p>
-                    <p className="text-sm font-black text-slate-900">₵{detailedStats?.totalSales.monthly.toFixed(2) || '0.00'}</p>
+                </div>
+
+                {/* Real-time Sales Overview Cards */}
+                <div className="grid grid-cols-1 gap-4">
+                  <motion.div 
+                    initial={{ opacity: 0, y: 20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="bg-emerald-500 p-6 rounded-[2rem] shadow-xl shadow-emerald-500/20 text-white relative overflow-hidden group"
+                  >
+                    <div className="absolute top-0 right-0 p-8 opacity-10 group-hover:scale-110 transition-transform">
+                      <TrendingUp size={80} />
+                    </div>
+                    <p className="text-[10px] font-black uppercase tracking-[0.2em] opacity-80 mb-1">Today's Revenue</p>
+                    <h3 className="text-4xl font-black mb-4">₵{detailedStats?.totalSales.daily.toFixed(2) || '0.00'}</h3>
+                    <div className="flex items-center gap-2 text-[10px] font-bold bg-white/20 w-fit px-3 py-1 rounded-full backdrop-blur-md">
+                      <CheckCircle2 size={12} />
+                      <span>{transactions.filter(t => new Date(t.timestamp).toDateString() === new Date().toDateString()).length} Transactions</span>
+                    </div>
+                  </motion.div>
+
+                  <div className="grid grid-cols-2 gap-4">
+                    <motion.div 
+                      initial={{ opacity: 0, y: 20 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ delay: 0.1 }}
+                      className="bg-white p-5 rounded-[2rem] shadow-sm border border-slate-100"
+                    >
+                      <div className="w-10 h-10 bg-blue-50 text-blue-500 rounded-2xl flex items-center justify-center mb-3">
+                        <Calendar size={20} />
+                      </div>
+                      <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Weekly</p>
+                      <p className="text-xl font-black text-slate-900">₵{detailedStats?.totalSales.weekly.toFixed(2) || '0.00'}</p>
+                    </motion.div>
+                    <motion.div 
+                      initial={{ opacity: 0, y: 20 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ delay: 0.2 }}
+                      className="bg-white p-5 rounded-[2rem] shadow-sm border border-slate-100"
+                    >
+                      <div className="w-10 h-10 bg-purple-50 text-purple-500 rounded-2xl flex items-center justify-center mb-3">
+                        <Store size={20} />
+                      </div>
+                      <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Monthly</p>
+                      <p className="text-xl font-black text-slate-900">₵{detailedStats?.totalSales.monthly.toFixed(2) || '0.00'}</p>
+                    </motion.div>
                   </div>
                 </div>
 
                 {/* Sales Trend Chart */}
-                <div className="bg-white p-5 rounded-3xl shadow-sm border border-slate-100">
-                  <div className="flex justify-between items-center mb-6">
-                    <h3 className="text-sm font-black text-slate-900 uppercase tracking-widest">Sales Trend</h3>
-                    <div className="flex items-center gap-1 text-[10px] font-bold text-emerald-500 bg-emerald-50 px-2 py-0.5 rounded-full">
-                      <TrendingUp size={12} />
-                      <span>Last 30 Days</span>
+                <motion.div 
+                  initial={{ opacity: 0, scale: 0.95 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  transition={{ delay: 0.3 }}
+                  className="bg-white p-6 rounded-[2.5rem] shadow-sm border border-slate-100"
+                >
+                  <div className="flex justify-between items-center mb-8">
+                    <div>
+                      <h3 className="text-sm font-black text-slate-900 uppercase tracking-widest">Revenue Flow</h3>
+                      <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">Last 30 Days</p>
+                    </div>
+                    <div className="w-10 h-10 bg-slate-50 text-slate-400 rounded-2xl flex items-center justify-center">
+                      <TrendingUp size={20} />
                     </div>
                   </div>
                   <div className="h-[200px] w-full">
@@ -1624,18 +1677,19 @@ export default function App() {
                           />
                           <Tooltip 
                             contentStyle={{ 
-                              borderRadius: '12px', 
+                              borderRadius: '16px', 
                               border: 'none', 
-                              boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)',
+                              boxShadow: '0 20px 25px -5px rgb(0 0 0 / 0.1)',
                               fontSize: '10px',
-                              fontWeight: 'bold'
+                              fontWeight: 'bold',
+                              padding: '12px'
                             }}
                           />
                           <Area 
                             type="monotone" 
                             dataKey="amount" 
                             stroke="#10b981" 
-                            strokeWidth={3}
+                            strokeWidth={4}
                             fillOpacity={1} 
                             fill="url(#colorAmount)" 
                           />
@@ -1647,63 +1701,120 @@ export default function App() {
                       </div>
                     )}
                   </div>
-                </div>
+                </motion.div>
 
-                {/* Best Selling Products */}
-                <div className="bg-white p-5 rounded-3xl shadow-sm border border-slate-100">
-                  <h3 className="text-sm font-black text-slate-900 uppercase tracking-widest mb-4">Best Sellers</h3>
-                  <div className="space-y-4">
-                    {detailedStats?.bestSellers && detailedStats.bestSellers.length > 0 ? (
-                      detailedStats.bestSellers.map((product, idx) => (
-                        <div key={idx} className="flex items-center gap-4">
-                          <div className="w-8 h-8 bg-slate-100 rounded-xl flex items-center justify-center text-slate-500 font-black text-xs">
-                            {idx + 1}
-                          </div>
-                          <div className="flex-1">
-                            <p className="text-xs font-bold text-slate-800">{product.name}</p>
-                            <div className="w-full bg-slate-100 h-1.5 rounded-full mt-1 overflow-hidden">
-                              <motion.div 
-                                initial={{ width: 0 }}
-                                animate={{ width: `${(product.quantity / detailedStats.bestSellers[0].quantity) * 100}%` }}
-                                className="bg-emerald-500 h-full rounded-full"
-                              />
+                <div className="grid grid-cols-1 gap-6">
+                  {/* Best Selling Products */}
+                  <motion.div 
+                    initial={{ opacity: 0, x: -20 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    transition={{ delay: 0.4 }}
+                    className="bg-white p-6 rounded-[2.5rem] shadow-sm border border-slate-100"
+                  >
+                    <h3 className="text-sm font-black text-slate-900 uppercase tracking-widest mb-6">Top Performers</h3>
+                    <div className="space-y-5">
+                      {detailedStats?.bestSellers && detailedStats.bestSellers.length > 0 ? (
+                        detailedStats.bestSellers.slice(0, 5).map((product, idx) => (
+                          <div key={idx} className="flex items-center gap-4">
+                            <div className={`w-10 h-10 rounded-2xl flex items-center justify-center font-black text-sm ${
+                              idx === 0 ? 'bg-amber-100 text-amber-600' : 
+                              idx === 1 ? 'bg-slate-100 text-slate-600' : 
+                              idx === 2 ? 'bg-orange-100 text-orange-600' : 'bg-slate-50 text-slate-400'
+                            }`}>
+                              {idx + 1}
+                            </div>
+                            <div className="flex-1">
+                              <div className="flex justify-between items-center mb-1">
+                                <p className="text-xs font-black text-slate-800">{product.name}</p>
+                                <p className="text-[10px] font-black text-slate-900">{product.quantity} sold</p>
+                              </div>
+                              <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
+                                <motion.div 
+                                  initial={{ width: 0 }}
+                                  animate={{ width: `${(product.quantity / detailedStats.bestSellers[0].quantity) * 100}%` }}
+                                  className={`h-full rounded-full ${
+                                    idx === 0 ? 'bg-emerald-500' : 'bg-slate-400'
+                                  }`}
+                                />
+                              </div>
                             </div>
                           </div>
-                          <div className="text-right">
-                            <p className="text-xs font-black text-slate-900">{product.quantity} sold</p>
-                            <p className="text-[9px] font-bold text-emerald-500">₵{product.revenue.toFixed(2)}</p>
-                          </div>
+                        ))
+                      ) : (
+                        <div className="text-center py-4 text-slate-400 text-xs font-bold">
+                          No sales data yet
                         </div>
-                      ))
-                    ) : (
-                      <div className="text-center py-4 text-slate-400 text-xs font-bold">
-                        No sales data yet
-                      </div>
-                    )}
-                  </div>
+                      )}
+                    </div>
+                  </motion.div>
+
+                  {/* Recent Activity */}
+                  <motion.div 
+                    initial={{ opacity: 0, x: 20 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    transition={{ delay: 0.5 }}
+                    className="bg-white p-6 rounded-[2.5rem] shadow-sm border border-slate-100"
+                  >
+                    <div className="flex justify-between items-center mb-6">
+                      <h3 className="text-sm font-black text-slate-900 uppercase tracking-widest">Recent Activity</h3>
+                      <button onClick={() => setActiveTab('history')} className="text-[10px] font-black text-emerald-500 uppercase tracking-widest hover:underline">View All</button>
+                    </div>
+                    <div className="space-y-4">
+                      {transactions.slice(0, 4).map((t, idx) => (
+                        <div key={t.id} className="flex items-center justify-between p-3 bg-slate-50 rounded-2xl border border-slate-100">
+                          <div className="flex items-center gap-3">
+                            <div className="w-8 h-8 bg-white rounded-xl flex items-center justify-center text-emerald-500 shadow-sm">
+                              <ShoppingCart size={14} />
+                            </div>
+                            <div>
+                              <p className="text-[11px] font-black text-slate-900">Order #{t.id}</p>
+                              <p className="text-[9px] text-slate-400 font-bold">{new Date(t.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
+                            </div>
+                          </div>
+                          <p className="text-xs font-black text-slate-900">₵{t.total.toFixed(2)}</p>
+                        </div>
+                      ))}
+                      {transactions.length === 0 && (
+                        <div className="text-center py-4 text-slate-400 text-xs font-bold">
+                          No recent transactions
+                        </div>
+                      )}
+                    </div>
+                  </motion.div>
                 </div>
 
                 {/* Subscription Summary */}
-                <div className="bg-slate-900 p-5 rounded-3xl shadow-xl text-white">
-                  <div className="flex justify-between items-center mb-4">
-                    <div>
-                      <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Store Status</p>
-                      <h3 className="text-sm font-black uppercase tracking-widest">{currentTenant.plan} Plan</h3>
+                <motion.div 
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: 0.6 }}
+                  className="bg-slate-900 p-8 rounded-[3rem] shadow-2xl text-white relative overflow-hidden"
+                >
+                  <div className="absolute -right-10 -top-10 w-40 h-40 bg-emerald-500/10 blur-[80px] rounded-full" />
+                  <div className="relative z-10">
+                    <div className="flex justify-between items-start mb-6">
+                      <div>
+                        <p className="text-[10px] font-black text-emerald-400 uppercase tracking-[0.2em] mb-2">Subscription Status</p>
+                        <h3 className="text-2xl font-black uppercase tracking-tight">{currentTenant.plan} Plan</h3>
+                      </div>
+                      <div className="bg-emerald-500/20 p-3 rounded-[1.5rem] text-emerald-400 backdrop-blur-md">
+                        <ShieldCheck size={24} />
+                      </div>
                     </div>
-                    <div className="bg-emerald-500/20 p-2 rounded-xl text-emerald-400">
-                      <ShieldCheck size={20} />
+                    <div className="flex items-center justify-between pt-6 border-t border-white/10">
+                      <div className="flex items-center gap-3 text-xs font-bold text-slate-400">
+                        <Calendar size={18} className="text-emerald-500" />
+                        <span>Expires: {new Date(currentTenant.expiry_date).toLocaleDateString()}</span>
+                      </div>
+                      <button 
+                        onClick={() => setIsRenewing(true)} 
+                        className="text-[10px] font-black uppercase tracking-widest bg-emerald-500 text-white px-6 py-3 rounded-2xl shadow-lg shadow-emerald-500/20 active:scale-95 transition-all"
+                      >
+                        Manage Account
+                      </button>
                     </div>
                   </div>
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2 text-[10px] font-bold text-slate-400">
-                      <Calendar size={14} />
-                      <span>Expires: {new Date(currentTenant.expiry_date).toLocaleDateString()}</span>
-                    </div>
-                    <button onClick={() => setIsRenewing(true)} className="text-[10px] font-black uppercase tracking-widest bg-white text-slate-900 px-4 py-2 rounded-xl">
-                      Manage
-                    </button>
-                  </div>
-                </div>
+                </motion.div>
               </div>
             )}
 
