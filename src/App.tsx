@@ -47,7 +47,7 @@ import { Product, CartItem, Transaction, DashboardStats, Tenant, Notification, A
 export default function App() {
   const [view, setView] = useState<'login' | 'store' | 'admin'>('login');
   const [activeTab, setActiveTab] = useState<'dashboard' | 'pos' | 'history' | 'inventory' | 'users' | 'subscription' | 'settings'>('pos');
-  const [adminActiveTab, setAdminActiveTab] = useState<'tenants' | 'security'>('tenants');
+  const [adminActiveTab, setAdminActiveTab] = useState<'tenants' | 'security' | 'payments'>('tenants');
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [loginData, setLoginData] = useState({ username: '', password: '' });
@@ -70,9 +70,13 @@ export default function App() {
   const [showSuccess, setShowSuccess] = useState(false);
   const [lastTransaction, setLastTransaction] = useState<Transaction | null>(null);
   const [isRenewing, setIsRenewing] = useState(false);
+  const [paymentStep, setPaymentStep] = useState<'select' | 'pay'>('select');
+  const [selectedPlan, setSelectedPlan] = useState<{ id: string, title: string, price: number } | null>(null);
+  const [paymentReference, setPaymentReference] = useState('');
+  const [paymentMethod, setPaymentMethod] = useState<'momo' | 'bank'>('momo');
+  const [isSubmittingPayment, setIsSubmittingPayment] = useState(false);
   const [isPrinterModalOpen, setIsPrinterModalOpen] = useState(false);
   const [subscriptionHistory, setSubscriptionHistory] = useState<SubscriptionPayment[]>([]);
-  const [isSubmittingPayment, setIsSubmittingPayment] = useState(false);
   const [isChangingPassword, setIsChangingPassword] = useState(false);
   const [passwordForm, setPasswordForm] = useState({ currentPassword: '', newPassword: '', confirmPassword: '' });
   const [isForgotPassword, setIsForgotPassword] = useState(false);
@@ -430,8 +434,8 @@ export default function App() {
     }
   };
 
-  const handleRejectSubscription = async (id: number) => {
-    const reason = prompt('Reason for rejection:');
+  const handleRejectSubscription = async (id: number, providedReason?: string) => {
+    const reason = providedReason || prompt('Reason for rejection:');
     if (reason === null) return;
     const res = await fetch('/api/admin/subscriptions/reject', {
       method: 'POST',
@@ -668,19 +672,50 @@ export default function App() {
     fetchNotifications();
   };
 
-  const handleRenew = async (plan: string) => {
-    if (!currentTenant) return;
-    const res = await fetch('/api/renew', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ tenantId: currentTenant.id, plan })
-    });
-    if (res.ok) {
-      const data = await res.json();
-      setCurrentTenant({ ...currentTenant, expiry_date: data.expiry_date, plan: plan as any });
-      setIsRenewing(false);
-      fetchTenants();
-      fetchNotifications();
+  const handleRenew = (planId: string) => {
+    const plans = {
+      monthly: { id: 'monthly', title: 'Monthly', price: 29 },
+      quarterly: { id: 'quarterly', title: 'Quarterly', price: 79 },
+      annual: { id: 'annual', title: 'Annual', price: 299 }
+    };
+    setSelectedPlan(plans[planId as keyof typeof plans]);
+    setPaymentStep('pay');
+  };
+
+  const handlePaymentSubmit = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!currentTenant || !selectedPlan || !paymentReference) return;
+
+    setIsSubmittingPayment(true);
+    try {
+      const res = await fetch('/api/subscription/pay', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          tenantId: currentTenant.id,
+          plan: selectedPlan.id,
+          amount: selectedPlan.price,
+          paymentMethod,
+          reference: paymentReference
+        })
+      });
+
+      if (res.ok) {
+        setIsRenewing(false);
+        setPaymentStep('select');
+        setSelectedPlan(null);
+        setPaymentReference('');
+        fetchNotifications();
+        alert('Payment submitted successfully! Our team will verify and approve your subscription shortly.');
+      } else {
+        const err = await res.json();
+        alert(err.error || 'Failed to submit payment');
+      }
+    } catch (error) {
+      console.error('Payment submission failed', error);
+      alert('Connection error. Please try again.');
+    } finally {
+      setIsSubmittingPayment(false);
     }
   };
 
@@ -1070,6 +1105,12 @@ export default function App() {
               Tenants
             </button>
             <button 
+              onClick={() => setAdminActiveTab('payments')}
+              className={`flex-1 py-2 rounded-xl text-xs font-black uppercase tracking-widest transition-all ${adminActiveTab === 'payments' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500'}`}
+            >
+              Payments {pendingSubscriptions.length > 0 && <span className="ml-1 bg-red-500 text-white text-[8px] px-1.5 py-0.5 rounded-full">{pendingSubscriptions.length}</span>}
+            </button>
+            <button 
               onClick={() => setAdminActiveTab('security')}
               className={`flex-1 py-2 rounded-xl text-xs font-black uppercase tracking-widest transition-all ${adminActiveTab === 'security' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500'}`}
             >
@@ -1077,54 +1118,14 @@ export default function App() {
             </button>
           </div>
 
-          {adminActiveTab === 'tenants' ? (
+          {adminActiveTab === 'tenants' && (
             <>
               {adminStats && (
                 <div className="grid grid-cols-2 gap-4">
                   <AdminStatCard icon={<Users size={20} />} label="Total Tenants" value={adminStats.totalTenants} />
-                  <AdminStatCard icon={<TrendingUp size={20} />} label="Total Revenue" value={`$${adminStats.totalRevenue.toFixed(0)}`} />
+                  <AdminStatCard icon={<TrendingUp size={20} />} label="Total Revenue" value={`₵${adminStats.totalRevenue.toFixed(0)}`} />
                   <AdminStatCard icon={<ShoppingCart size={20} />} label="Transactions" value={adminStats.totalTransactions} />
                   <AdminStatCard icon={<CheckCircle2 size={20} />} label="Active Stores" value={adminStats.activeTenants} />
-                </div>
-              )}
-
-              {pendingSubscriptions.length > 0 && (
-                <div className="space-y-4">
-                  <h2 className="text-lg font-black text-slate-900 flex items-center gap-2">
-                    Pending Subscriptions
-                    <span className="bg-amber-500 text-white text-[10px] px-2 py-0.5 rounded-full">{pendingSubscriptions.length}</span>
-                  </h2>
-                  <div className="space-y-3">
-                    {pendingSubscriptions.map(sub => (
-                      <div key={sub.id} className="bg-white p-4 rounded-2xl border border-amber-100 shadow-sm space-y-3">
-                        <div className="flex justify-between items-start">
-                          <div>
-                            <h3 className="font-bold text-slate-900">{sub.tenant_name}</h3>
-                            <p className="text-[10px] text-slate-500 uppercase font-black tracking-widest">{sub.plan} Plan - {sub.amount} GH₵</p>
-                          </div>
-                          <span className="bg-amber-100 text-amber-600 text-[9px] font-black px-2 py-0.5 rounded-full uppercase">Pending</span>
-                        </div>
-                        <div className="bg-slate-50 p-3 rounded-xl">
-                          <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mb-1">Reference</p>
-                          <p className="text-xs font-mono font-bold text-slate-700">{sub.reference}</p>
-                        </div>
-                        <div className="flex gap-2">
-                          <button 
-                            onClick={() => handleApproveSubscription(sub.id)}
-                            className="flex-1 bg-emerald-500 text-white text-xs font-black py-2 rounded-xl shadow-lg shadow-emerald-500/20"
-                          >
-                            Approve
-                          </button>
-                          <button 
-                            onClick={() => handleRejectSubscription(sub.id)}
-                            className="flex-1 bg-slate-100 text-slate-500 text-xs font-black py-2 rounded-xl"
-                          >
-                            Reject
-                          </button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
                 </div>
               )}
 
@@ -1209,7 +1210,88 @@ export default function App() {
                 ))}
               </div>
             </>
-          ) : (
+          )}
+
+          {adminActiveTab === 'payments' && (
+            <div className="space-y-6">
+              <div className="flex justify-between items-end">
+                <div>
+                  <p className="text-[10px] font-black text-emerald-500 uppercase tracking-[0.2em] mb-1">Verification</p>
+                  <h2 className="text-2xl font-black text-slate-900">Subscription Payments</h2>
+                </div>
+                <div className="bg-white p-2 rounded-xl shadow-sm border border-slate-100 flex items-center gap-2">
+                  <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">{pendingSubscriptions.length} Pending</span>
+                </div>
+              </div>
+
+              {pendingSubscriptions.length > 0 ? (
+                <div className="space-y-4">
+                  {pendingSubscriptions.map(sub => (
+                    <div key={sub.id} className="bg-white p-6 rounded-[2.5rem] border border-amber-100 shadow-sm space-y-4">
+                      <div className="flex justify-between items-start">
+                        <div className="flex items-center gap-3">
+                          <div className="w-10 h-10 bg-amber-50 text-amber-600 rounded-2xl flex items-center justify-center font-black">
+                            {sub.tenant_name?.charAt(0)}
+                          </div>
+                          <div>
+                            <h3 className="font-black text-slate-900">{sub.tenant_name}</h3>
+                            <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">{new Date(sub.created_at).toLocaleString()}</p>
+                          </div>
+                        </div>
+                        <div className="bg-amber-50 text-amber-600 text-[9px] font-black px-3 py-1 rounded-full uppercase tracking-widest">Pending</div>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-4">
+                        <div className="bg-slate-50 p-4 rounded-2xl">
+                          <p className="text-[9px] text-slate-400 font-black uppercase tracking-widest mb-1">Plan & Amount</p>
+                          <p className="text-sm font-black text-slate-900 uppercase">{sub.plan} - ₵{sub.amount}</p>
+                        </div>
+                        <div className="bg-slate-50 p-4 rounded-2xl">
+                          <p className="text-[9px] text-slate-400 font-black uppercase tracking-widest mb-1">Method</p>
+                          <p className="text-sm font-black text-slate-900 uppercase">{sub.payment_method}</p>
+                        </div>
+                      </div>
+
+                      <div className="bg-slate-900 p-4 rounded-2xl text-white">
+                        <p className="text-[9px] text-slate-400 font-black uppercase tracking-widest mb-1">Transaction Reference</p>
+                        <p className="text-sm font-mono font-black text-emerald-400 break-all">{sub.reference}</p>
+                      </div>
+
+                      <div className="flex gap-3">
+                        <button 
+                          onClick={() => handleApproveSubscription(sub.id)}
+                          className="flex-1 bg-emerald-500 text-white text-xs font-black py-4 rounded-2xl shadow-xl shadow-emerald-500/20 active:scale-95 transition-all"
+                        >
+                          Approve Subscription
+                        </button>
+                        <button 
+                          onClick={() => {
+                            const reason = prompt('Reason for rejection:');
+                            if (reason) handleRejectSubscription(sub.id, reason);
+                          }}
+                          className="px-6 bg-slate-100 text-slate-500 text-xs font-black py-4 rounded-2xl hover:bg-slate-200 transition-all"
+                        >
+                          Reject
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="bg-white p-12 rounded-[3rem] border border-slate-100 text-center space-y-4">
+                  <div className="w-20 h-20 bg-slate-50 rounded-full flex items-center justify-center mx-auto text-slate-200">
+                    <CheckCircle2 size={40} />
+                  </div>
+                  <div>
+                    <h3 className="text-lg font-black text-slate-900">All Caught Up!</h3>
+                    <p className="text-slate-400 text-sm font-bold">No pending subscription payments to verify.</p>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {adminActiveTab === 'security' && (
             <div className="space-y-6">
               <div className="bg-white p-6 rounded-[2.5rem] border border-slate-100 shadow-sm">
                 <div className="flex items-center gap-4 mb-8">
@@ -2319,45 +2401,148 @@ export default function App() {
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              onClick={() => setIsRenewing(false)}
+              onClick={() => {
+                setIsRenewing(false);
+                setPaymentStep('select');
+              }}
               className="absolute inset-0 bg-slate-900/60 backdrop-blur-md z-[70]"
             />
             <motion.div 
               initial={{ y: '100%' }}
               animate={{ y: 0 }}
               exit={{ y: '100%' }}
-              className="absolute bottom-0 left-0 right-0 bg-white rounded-t-[2.5rem] shadow-2xl z-[70] p-8 space-y-6"
+              className="absolute bottom-0 left-0 right-0 bg-white rounded-t-[2.5rem] shadow-2xl z-[70] p-8 space-y-6 max-h-[90%] overflow-y-auto no-scrollbar"
             >
-              <div className="text-center">
-                <h2 className="text-2xl font-black text-slate-900">Renew Subscription</h2>
-                <p className="text-slate-500 text-sm">Select a plan for <span className="font-bold">{currentTenant.name}</span></p>
-              </div>
+              {paymentStep === 'select' ? (
+                <>
+                  <div className="text-center">
+                    <h2 className="text-2xl font-black text-slate-900">Renew Subscription</h2>
+                    <p className="text-slate-500 text-sm">Select a plan for <span className="font-bold">{currentTenant.name}</span></p>
+                  </div>
 
-              <div className="space-y-3">
-                <PlanOption 
-                  title="Monthly" 
-                  price="$29.00" 
-                  period="/mo" 
-                  onClick={() => handleRenew('monthly')} 
-                />
-                <PlanOption 
-                  title="Quarterly" 
-                  price="$79.00" 
-                  period="/3mo" 
-                  onClick={() => handleRenew('quarterly')} 
-                  best
-                />
-                <PlanOption 
-                  title="Annual" 
-                  price="$299.00" 
-                  period="/yr" 
-                  onClick={() => handleRenew('annual')} 
-                />
-              </div>
+                  <div className="space-y-3">
+                    <PlanOption 
+                      title="Monthly" 
+                      price="₵29.00" 
+                      period="/mo" 
+                      onClick={() => handleRenew('monthly')} 
+                    />
+                    <PlanOption 
+                      title="Quarterly" 
+                      price="₵79.00" 
+                      period="/3mo" 
+                      onClick={() => handleRenew('quarterly')} 
+                      best
+                    />
+                    <PlanOption 
+                      title="Annual" 
+                      price="₵299.00" 
+                      period="/yr" 
+                      onClick={() => handleRenew('annual')} 
+                    />
+                  </div>
+                </>
+              ) : (
+                <form onSubmit={handlePaymentSubmit} className="space-y-6">
+                  <div className="flex items-center gap-4 mb-2">
+                    <button 
+                      type="button"
+                      onClick={() => setPaymentStep('select')}
+                      className="p-2 bg-slate-100 rounded-xl text-slate-500"
+                    >
+                      <ChevronRight size={20} className="rotate-180" />
+                    </button>
+                    <div>
+                      <h2 className="text-xl font-black text-slate-900">Complete Payment</h2>
+                      <p className="text-slate-500 text-xs font-bold uppercase tracking-widest">{selectedPlan?.title} Plan - ₵{selectedPlan?.price}</p>
+                    </div>
+                  </div>
+
+                  <div className="bg-emerald-50 p-4 rounded-2xl border border-emerald-100 space-y-3">
+                    <p className="text-[10px] font-black text-emerald-600 uppercase tracking-widest">Payment Instructions</p>
+                    <div className="grid grid-cols-2 gap-3">
+                      <button 
+                        type="button"
+                        onClick={() => setPaymentMethod('momo')}
+                        className={`p-3 rounded-xl border-2 transition-all flex flex-col items-center gap-2 ${paymentMethod === 'momo' ? 'border-emerald-500 bg-white shadow-sm' : 'border-transparent bg-emerald-500/5 text-emerald-600/50'}`}
+                      >
+                        <CreditCard size={20} />
+                        <span className="text-[10px] font-black uppercase tracking-widest">MoMo</span>
+                      </button>
+                      <button 
+                        type="button"
+                        onClick={() => setPaymentMethod('bank')}
+                        className={`p-3 rounded-xl border-2 transition-all flex flex-col items-center gap-2 ${paymentMethod === 'bank' ? 'border-emerald-500 bg-white shadow-sm' : 'border-transparent bg-emerald-500/5 text-emerald-600/50'}`}
+                      >
+                        <Store size={20} />
+                        <span className="text-[10px] font-black uppercase tracking-widest">Bank</span>
+                      </button>
+                    </div>
+
+                    <div className="bg-white p-4 rounded-xl border border-emerald-100">
+                      {paymentMethod === 'momo' ? (
+                        <div className="space-y-4">
+                          <div className="space-y-1">
+                            <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">MTN Mobile Money</p>
+                            <p className="text-sm font-black text-slate-900">0542361753</p>
+                            <p className="text-[10px] font-bold text-slate-500">Name: Akwasi Rabbi</p>
+                          </div>
+                          <div className="h-px bg-slate-100 w-full" />
+                          <div className="space-y-1">
+                            <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Telecel Cash</p>
+                            <p className="text-sm font-black text-slate-900">0207923981</p>
+                            <p className="text-[10px] font-bold text-slate-500">Name: Akwasi Rabbi</p>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="space-y-1">
+                          <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Bank Details (Ecobank)</p>
+                          <p className="text-sm font-black text-slate-900">1441004209423</p>
+                          <p className="text-[10px] font-bold text-slate-500">Name: Akwasi Rabbi</p>
+                          <p className="text-[10px] font-bold text-slate-500">Bank: Ecobank Ghana</p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="text-slate-500 text-[10px] font-black uppercase tracking-widest ml-1">Transaction Reference</label>
+                    <input 
+                      type="text"
+                      required
+                      placeholder="Enter MoMo/Bank Ref ID"
+                      className="w-full bg-slate-50 border border-slate-200 p-4 rounded-2xl text-slate-900 placeholder:text-slate-400 focus:outline-none focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/5 transition-all font-medium"
+                      value={paymentReference}
+                      onChange={(e) => setPaymentReference(e.target.value)}
+                    />
+                    <p className="text-[9px] text-slate-400 font-bold ml-1">Please enter the transaction ID from your payment receipt.</p>
+                  </div>
+
+                  <motion.button
+                    whileHover={{ scale: 1.02 }}
+                    whileTap={{ scale: 0.98 }}
+                    type="submit"
+                    disabled={isSubmittingPayment}
+                    className={`w-full bg-emerald-500 text-white p-5 rounded-2xl font-black shadow-xl shadow-emerald-500/20 transition-all flex items-center justify-center gap-3 ${isSubmittingPayment ? 'opacity-50 cursor-not-allowed' : ''}`}
+                  >
+                    {isSubmittingPayment ? (
+                      <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                    ) : (
+                      <>
+                        <CheckCircle2 size={20} />
+                        <span>Submit Payment</span>
+                      </>
+                    )}
+                  </motion.button>
+                </form>
+              )}
 
               <button 
-                onClick={() => setIsRenewing(false)}
-                className="w-full py-4 text-slate-400 font-bold text-sm hover:text-slate-600 transition-colors"
+                onClick={() => {
+                  setIsRenewing(false);
+                  setPaymentStep('select');
+                }}
+                className="w-full py-2 text-slate-400 font-bold text-sm hover:text-slate-600 transition-colors"
               >
                 Cancel
               </button>
