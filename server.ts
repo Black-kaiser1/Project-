@@ -2,6 +2,8 @@ import express from "express";
 import { createServer as createViteServer } from "vite";
 import Database from "better-sqlite3";
 import path from "path";
+import http from "http";
+import { WebSocketServer, WebSocket } from "ws";
 
 const db = new Database("pos.db");
 
@@ -139,9 +141,9 @@ function checkSystemStatus() {
 }
 
 // Run check on start
-checkSystemStatus();
+// checkSystemStatus(); // Moved inside startServer
 // Run check every hour
-setInterval(checkSystemStatus, 3600000);
+// setInterval(checkSystemStatus, 3600000); // Moved inside startServer
 
 // Seed tenants if empty
 const tenantCount = db.prepare("SELECT COUNT(*) as count FROM tenants").get() as { count: number };
@@ -180,7 +182,132 @@ console.log("Current users in DB:", allUsers);
 
 async function startServer() {
   const app = express();
+  const server = http.createServer(app);
+  const wss = new WebSocketServer({ server });
   const PORT = 3000;
+
+  // Store connected clients by tenantId
+  const clients = new Map<number, Set<WebSocket>>();
+
+  wss.on('connection', (ws) => {
+    let currentTenantId: number | null = null;
+
+    ws.on('message', (message) => {
+      try {
+        const data = JSON.parse(message.toString());
+        if (data.type === 'join' && data.tenantId) {
+          currentTenantId = data.tenantId;
+          if (!clients.has(currentTenantId!)) {
+            clients.set(currentTenantId!, new Set());
+          }
+          clients.get(currentTenantId!)!.add(ws);
+          console.log(`Client joined tenant room: ${currentTenantId}`);
+        }
+      } catch (e) {
+        console.error('WS Message error:', e);
+      }
+    });
+
+    ws.on('close', () => {
+      if (currentTenantId && clients.has(currentTenantId)) {
+        clients.get(currentTenantId)!.delete(ws);
+        if (clients.get(currentTenantId)!.size === 0) {
+          clients.delete(currentTenantId);
+        }
+      }
+    });
+  });
+
+  const broadcastToTenant = (tenantId: number, data: any) => {
+    const tenantClients = clients.get(tenantId);
+    if (tenantClients) {
+      const message = JSON.stringify(data);
+      tenantClients.forEach((client) => {
+        if (client.readyState === WebSocket.OPEN) {
+          client.send(message);
+        }
+      });
+    }
+  };
+
+  // Function to check and generate notifications (subscriptions and low stock)
+  function checkSystemStatus() {
+    const now = new Date();
+    
+    // 1. Check Subscriptions
+    const tenants = db.prepare("SELECT id, name, expiry_date FROM tenants").all() as any[];
+    tenants.forEach(tenant => {
+      const expiry = new Date(tenant.expiry_date);
+      const diffDays = Math.ceil((expiry.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+      
+      if (diffDays === 7 || diffDays === 3 || diffDays <= 0) {
+        let message = "";
+        let type = "warning";
+        
+        if (diffDays === 7) message = "Your subscription expires in 7 days. Please renew to avoid service interruption.";
+        else if (diffDays === 3) {
+          message = "Urgent: Your subscription expires in 3 days!";
+          type = "critical";
+        }
+        else if (diffDays <= 0) {
+          message = "Your subscription has expired. Account is now locked.";
+          type = "error";
+        }
+
+        const exists = db.prepare("SELECT id FROM notifications WHERE tenant_id = ? AND message = ? AND date(created_at) = date('now')").get(tenant.id, message);
+        if (!exists) {
+          const info = db.prepare("INSERT INTO notifications (tenant_id, message, type) VALUES (?, ?, ?)").run(tenant.id, message, type);
+          broadcastToTenant(tenant.id, {
+            type: 'notification_created',
+            notification: {
+              id: info.lastInsertRowid,
+              tenant_id: tenant.id,
+              message,
+              type,
+              is_read: 0,
+              created_at: new Date().toISOString()
+            }
+          });
+        }
+      }
+    });
+
+    // 2. Check Low Stock
+    const lowStockProducts = db.prepare("SELECT id, tenant_id, name, stock, low_stock_threshold FROM products WHERE stock <= low_stock_threshold").all() as any[];
+    lowStockProducts.forEach(product => {
+      checkLowStock(product.tenant_id, product.id);
+    });
+  }
+
+  function checkLowStock(tenantId: number, productId: number) {
+    const product = db.prepare("SELECT id, name, stock, low_stock_threshold FROM products WHERE id = ? AND tenant_id = ?").get(productId, tenantId) as any;
+    if (product && product.stock <= product.low_stock_threshold) {
+      const message = `Low stock alert: ${product.name} has only ${product.stock} units left (Threshold: ${product.low_stock_threshold})`;
+      
+      // Check if notification already exists for today
+      const exists = db.prepare("SELECT id FROM notifications WHERE tenant_id = ? AND message = ? AND date(created_at) = date('now')").get(tenantId, message);
+      
+      if (!exists) {
+        const info = db.prepare("INSERT INTO notifications (tenant_id, message, type) VALUES (?, ?, ?)").run(tenantId, message, 'warning');
+        broadcastToTenant(tenantId, {
+          type: 'notification_created',
+          notification: {
+            id: info.lastInsertRowid,
+            tenant_id: tenantId,
+            message,
+            type: 'warning',
+            is_read: 0,
+            created_at: new Date().toISOString()
+          }
+        });
+      }
+    }
+  }
+
+  // Run check on start
+  checkSystemStatus();
+  // Run check every hour
+  setInterval(checkSystemStatus, 3600000);
 
   app.use(express.json());
 
@@ -190,6 +317,28 @@ async function startServer() {
   });
 
   // Auth Routes
+  app.post("/api/auth/register", (req, res) => {
+    const { name, email, plan, password } = req.body;
+    
+    // Validate email uniqueness
+    const existingTenant = db.prepare("SELECT id FROM tenants WHERE email = ?").get(email);
+    const existingPending = db.prepare("SELECT id FROM pending_payments WHERE email = ? AND status = 'pending'").get(email);
+    
+    if (existingTenant || existingPending) {
+      return res.status(400).json({ error: "Email already registered" });
+    }
+
+    const expiry_days = 30; // Default trial/initial period
+    const amount = plan === 'annual' ? 299 : plan === 'quarterly' ? 79 : 29;
+    const paymentId = `REG-${Math.random().toString(36).substr(2, 9).toUpperCase()}`;
+    
+    db.prepare("INSERT INTO pending_payments (id, name, email, plan, expiry_days, amount, password) VALUES (?, ?, ?, ?, ?, ?, ?)").run(
+      paymentId, name, email, plan, expiry_days, amount, password
+    );
+    
+    res.json({ paymentId, amount });
+  });
+
   app.post("/api/auth/login", (req, res) => {
     const { username, password } = req.body;
     console.log(`Login attempt for: ${username}`);
@@ -305,10 +454,18 @@ async function startServer() {
 
   app.patch("/api/products/:id", (req, res) => {
     const { id } = req.params;
-    const { name, price, category, stock, low_stock_threshold, image } = req.body;
+    const { name, price, category, stock, low_stock_threshold, image, tenant_id } = req.body;
+    
+    // Verify ownership
+    const product = db.prepare("SELECT tenant_id FROM products WHERE id = ?").get(id) as { tenant_id: number };
+    if (!product || product.tenant_id !== tenant_id) {
+      return res.status(403).json({ error: "Unauthorized" });
+    }
+
     db.prepare("UPDATE products SET name = ?, price = ?, category = ?, stock = ?, low_stock_threshold = ?, image = ? WHERE id = ?").run(
       name, price, category, stock, low_stock_threshold, image, id
     );
+    checkLowStock(tenant_id, parseInt(id));
     res.json({ success: true });
   });
 
@@ -316,6 +473,10 @@ async function startServer() {
     const { id } = req.params;
     const { adjustment } = req.body;
     db.prepare("UPDATE products SET stock = stock + ? WHERE id = ?").run(adjustment, id);
+    
+    const product = db.prepare("SELECT tenant_id FROM products WHERE id = ?").get(id) as { tenant_id: number };
+    if (product) checkLowStock(product.tenant_id, parseInt(id));
+    
     res.json({ success: true });
   });
 
@@ -341,6 +502,18 @@ async function startServer() {
     const updateStock = db.prepare("UPDATE products SET stock = stock - ? WHERE id = ? AND tenant_id = ?");
     items.forEach((item: any) => {
       updateStock.run(item.quantity, item.id, tenantId);
+      checkLowStock(tenantId, item.id);
+    });
+
+    // Broadcast the transaction to all clients in the same tenant
+    broadcastToTenant(tenantId, {
+      type: 'transaction_created',
+      transaction: {
+        id: info.lastInsertRowid,
+        total,
+        items,
+        timestamp: new Date().toISOString()
+      }
     });
 
     res.json({ id: info.lastInsertRowid });
@@ -382,9 +555,12 @@ async function startServer() {
       ORDER BY date(timestamp) ASC
     `).all(tenantId) as any[];
 
-    // Best Sellers
-    const transactions = db.prepare("SELECT items FROM transactions WHERE tenant_id = ? AND date(timestamp) >= date('now', '-30 days')").all(tenantId) as any[];
+    // Best Sellers & Category Stats
+    const transactions = db.prepare("SELECT items, total FROM transactions WHERE tenant_id = ? AND date(timestamp) >= date('now', '-30 days')").all(tenantId) as any[];
     const productStats: Record<string, { quantity: number, revenue: number }> = {};
+    const categoryStats: Record<string, number> = {};
+    let totalDailyOrders = 0;
+    let totalDailyRevenue = 0;
 
     transactions.forEach(t => {
       const items = JSON.parse(t.items);
@@ -394,6 +570,10 @@ async function startServer() {
         }
         productStats[item.name].quantity += item.quantity;
         productStats[item.name].revenue += (item.price * item.quantity);
+
+        if (item.category) {
+          categoryStats[item.category] = (categoryStats[item.category] || 0) + (item.price * item.quantity);
+        }
       });
     });
 
@@ -402,14 +582,24 @@ async function startServer() {
       .sort((a, b) => b.quantity - a.quantity)
       .slice(0, 5);
 
+    const categories = Object.entries(categoryStats)
+      .map(([name, value]) => ({ name, value }))
+      .sort((a, b) => b.value - a.value);
+
+    // Daily Average Order Value
+    const dailyStats = db.prepare("SELECT AVG(total) as avg, COUNT(*) as count, SUM(total) as sum FROM transactions WHERE tenant_id = ? AND date(timestamp) = date('now')").get(tenantId) as any;
+
     res.json({
       totalSales: {
-        daily: daily?.total || 0,
+        daily: dailyStats?.sum || 0,
         weekly: weekly?.total || 0,
-        monthly: monthly?.total || 0
+        monthly: monthly?.total || 0,
+        avgOrder: dailyStats?.avg || 0,
+        count: dailyStats?.count || 0
       },
       salesTrends: trends,
-      bestSellers
+      bestSellers,
+      categories
     });
   });
 
@@ -438,6 +628,38 @@ async function startServer() {
   });
 
   // Subscription Management (Admin Side)
+  app.get("/api/admin/registrations/pending", (req, res) => {
+    const pending = db.prepare("SELECT * FROM pending_payments WHERE status = 'pending' ORDER BY created_at DESC").all();
+    res.json(pending);
+  });
+
+  app.post("/api/admin/registrations/approve", (req, res) => {
+    const { paymentId } = req.body;
+    const pending = db.prepare("SELECT * FROM pending_payments WHERE id = ? AND status = 'pending'").get(paymentId) as any;
+    
+    if (!pending) return res.status(404).json({ error: "Registration not found" });
+    
+    const expiryDate = new Date();
+    expiryDate.setDate(expiryDate.getDate() + pending.expiry_days);
+    
+    try {
+      db.transaction(() => {
+        db.prepare("UPDATE pending_payments SET status = 'completed' WHERE id = ?").run(paymentId);
+        const tenantInfo = db.prepare("INSERT INTO tenants (name, email, plan, expiry_date) VALUES (?, ?, ?, ?)").run(
+          pending.name, pending.email, pending.plan, expiryDate.toISOString()
+        );
+        const tenantId = tenantInfo.lastInsertRowid;
+        
+        db.prepare("INSERT INTO users (tenant_id, username, password, role) VALUES (?, ?, ?, ?)").run(
+          tenantId, pending.email.split('@')[0], pending.password, 'tenant_admin'
+        );
+      })();
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(400).json({ error: e.message });
+    }
+  });
+
   app.get("/api/admin/subscriptions/pending", (req, res) => {
     const pending = db.prepare(`
       SELECT sp.*, t.name as tenant_name 
@@ -603,6 +825,24 @@ async function startServer() {
     res.json({ success: true });
   });
 
+  app.post("/api/profile/update", (req, res) => {
+    const { userId, username, email } = req.body;
+    if (!userId) return res.status(400).json({ error: "Missing userId" });
+
+    try {
+      // Check if username already exists for another user
+      const existing = db.prepare("SELECT id FROM users WHERE username = ? AND id != ?").get(username, userId);
+      if (existing) {
+        return res.status(400).json({ error: "Username already taken" });
+      }
+
+      db.prepare("UPDATE users SET username = ?, email = ? WHERE id = ?").run(username, email, userId);
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   // Global Error Handler
   app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
     console.error('Unhandled Error:', err);
@@ -623,7 +863,7 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
+  server.listen(PORT, "0.0.0.0", () => {
     console.log(`Server running on http://localhost:${PORT}`);
   });
 }

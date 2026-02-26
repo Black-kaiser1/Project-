@@ -40,6 +40,8 @@ export interface DetailedStats {
     daily: number;
     weekly: number;
     monthly: number;
+    avgOrder?: number;
+    count?: number;
   };
   bestSellers: {
     name: string;
@@ -49,6 +51,10 @@ export interface DetailedStats {
   salesTrends: {
     date: string;
     amount: number;
+  }[];
+  categories?: {
+    name: string;
+    value: number;
   }[];
 }
 

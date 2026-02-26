@@ -27,7 +27,9 @@ import {
   Trash,
   Printer,
   WifiOff,
-  CloudUpload
+  CloudUpload,
+  BarChart3,
+  Pencil
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
@@ -76,10 +78,18 @@ export default function App() {
   const [paymentMethod, setPaymentMethod] = useState<'momo' | 'bank'>('momo');
   const [isSubmittingPayment, setIsSubmittingPayment] = useState(false);
   const [isPrinterModalOpen, setIsPrinterModalOpen] = useState(false);
+  const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
+  const [profileData, setProfileData] = useState({ username: '', email: '' });
+  const [isUpdatingProfile, setIsUpdatingProfile] = useState(false);
   const [subscriptionHistory, setSubscriptionHistory] = useState<SubscriptionPayment[]>([]);
   const [isChangingPassword, setIsChangingPassword] = useState(false);
   const [passwordForm, setPasswordForm] = useState({ currentPassword: '', newPassword: '', confirmPassword: '' });
   const [isForgotPassword, setIsForgotPassword] = useState(false);
+  const [isRegistering, setIsRegistering] = useState(false);
+  const [registrationStep, setRegistrationStep] = useState<'form' | 'payment'>('form');
+  const [registrationData, setRegistrationData] = useState({ name: '', email: '', plan: 'monthly', password: '', confirmPassword: '' });
+  const [registrationPaymentInfo, setRegistrationPaymentInfo] = useState<{ paymentId: string, amount: number } | null>(null);
+  const [isSubmittingRegistration, setIsSubmittingRegistration] = useState(false);
   const [forgotPasswordStep, setForgotPasswordStep] = useState<'identify' | 'reset'>('identify');
   const [forgotPasswordData, setForgotPasswordData] = useState({ username: '', email: '', resetToken: '', newPassword: '', confirmPassword: '' });
   const [isResettingPassword, setIsResettingPassword] = useState(false);
@@ -87,6 +97,7 @@ export default function App() {
   // Admin State
   const [adminStats, setAdminStats] = useState<AdminStats | null>(null);
   const [pendingSubscriptions, setPendingSubscriptions] = useState<SubscriptionPayment[]>([]);
+  const [pendingRegistrations, setPendingRegistrations] = useState<any[]>([]);
   const [isAdminModalOpen, setIsAdminModalOpen] = useState(false);
   const [isConfirmModalOpen, setIsConfirmModalOpen] = useState(false);
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
@@ -114,6 +125,38 @@ export default function App() {
       syncOfflineTransactions();
     }
   }, [isOnline, currentTenant]);
+
+  useEffect(() => {
+    if (currentUser) {
+      setProfileData({ username: currentUser.username, email: currentUser.email });
+    }
+  }, [currentUser]);
+
+  const handleUpdateProfile = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!currentUser) return;
+    setIsUpdatingProfile(true);
+    try {
+      const res = await fetch('/api/profile/update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...profileData, userId: currentUser.id })
+      });
+      if (res.ok) {
+        setCurrentUser({ ...currentUser, ...profileData });
+        setIsProfileModalOpen(false);
+        setShowSuccess(true);
+        setTimeout(() => setShowSuccess(false), 3000);
+      } else {
+        const data = await res.json();
+        alert(data.error || 'Failed to update profile');
+      }
+    } catch (e) {
+      alert('Network error');
+    } finally {
+      setIsUpdatingProfile(false);
+    }
+  };
 
   const syncOfflineTransactions = async () => {
     if (!currentTenant || isSyncing) return;
@@ -173,11 +216,81 @@ export default function App() {
   }, [currentTenant]);
 
   useEffect(() => {
+    if (!currentTenant) return;
+
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const ws = new WebSocket(`${protocol}//${window.location.host}`);
+
+    ws.onopen = () => {
+      ws.send(JSON.stringify({ type: 'join', tenantId: currentTenant.id }));
+    };
+
+    ws.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        if (data.type === 'transaction_created') {
+          fetchStats();
+          fetchTransactions();
+          fetchProducts();
+          fetchDetailedStats();
+        }
+        if (data.type === 'notification_created') {
+          setNotifications(prev => {
+            if (prev.some(n => n.id === data.notification.id)) return prev;
+            return [data.notification, ...prev];
+          });
+        }
+      } catch (e) {
+        console.error('WS Message error:', e);
+      }
+    };
+
+    return () => {
+      ws.close();
+    };
+  }, [currentTenant]);
+
+  useEffect(() => {
     if (view === 'admin') {
       fetchAdminStats();
       fetchPendingSubscriptions();
+      fetchPendingRegistrations();
     }
   }, [view]);
+
+  const handleRegister = async (e: FormEvent) => {
+    e.preventDefault();
+    if (registrationData.password !== registrationData.confirmPassword) {
+      alert("Passwords do not match");
+      return;
+    }
+    setIsSubmittingRegistration(true);
+    try {
+      const res = await fetch('/api/auth/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: registrationData.name,
+          email: registrationData.email,
+          plan: registrationData.plan,
+          password: registrationData.password
+        })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setRegistrationPaymentInfo(data);
+        setRegistrationStep('payment');
+      } else {
+        const err = await res.json();
+        alert(err.error || 'Registration failed');
+      }
+    } catch (error) {
+      console.error('Registration error', error);
+      alert('Connection error');
+    } finally {
+      setIsSubmittingRegistration(false);
+    }
+  };
 
   const handleLogin = async (e: FormEvent) => {
     e.preventDefault();
@@ -414,11 +527,29 @@ export default function App() {
     setPendingSubscriptions(data);
   };
 
+  const fetchPendingRegistrations = async () => {
+    const res = await fetch('/api/admin/registrations/pending');
+    const data = await res.json();
+    setPendingRegistrations(data);
+  };
+
   const fetchSubscriptionHistory = async () => {
     if (!currentTenant) return;
     const res = await fetch(`/api/subscription/history?tenantId=${currentTenant.id}`);
     const data = await res.json();
     setSubscriptionHistory(data);
+  };
+
+  const handleApproveRegistration = async (id: string) => {
+    const res = await fetch('/api/admin/registrations/approve', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ paymentId: id })
+    });
+    if (res.ok) {
+      fetchPendingRegistrations();
+      fetchTenants();
+    }
   };
 
   const handleApproveSubscription = async (id: number) => {
@@ -888,6 +1019,10 @@ export default function App() {
 
           {isForgotPassword ? (
             <div className="space-y-6">
+              <div className="text-center space-y-2 mb-6">
+                <h2 className="text-2xl font-black text-white">Reset Access</h2>
+                <p className="text-slate-500 text-sm font-bold uppercase tracking-widest">Security Verification</p>
+              </div>
               <div className="flex items-center gap-2 mb-4">
                 <button 
                   onClick={() => {
@@ -977,14 +1112,163 @@ export default function App() {
                 </form>
               )}
             </div>
-          ) : (
-            <motion.form 
+          ) : isRegistering ? (
+            <motion.div
               initial={{ y: 20, opacity: 0 }}
               animate={{ y: 0, opacity: 1 }}
-              transition={{ delay: 0.2 }}
-              onSubmit={handleLogin} 
               className="space-y-6"
             >
+              <div className="text-center space-y-2 mb-6">
+                <h2 className="text-2xl font-black text-white">Create Store</h2>
+                <p className="text-slate-500 text-sm font-bold uppercase tracking-widest">Start your 30-day trial</p>
+              </div>
+
+              {registrationStep === 'form' ? (
+                <form onSubmit={handleRegister} className="space-y-4">
+                  <div className="space-y-1">
+                    <label className="text-slate-500 text-[10px] font-black uppercase tracking-widest ml-1">Store Name</label>
+                    <input 
+                      type="text"
+                      required
+                      placeholder="e.g. My Awesome Shop"
+                      className="w-full bg-[#0f172a]/50 border border-white/5 p-4 rounded-2xl text-white placeholder:text-slate-600 focus:outline-none focus:border-emerald-500/50 transition-all font-medium"
+                      value={registrationData.name}
+                      onChange={(e) => setRegistrationData({...registrationData, name: e.target.value})}
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-slate-500 text-[10px] font-black uppercase tracking-widest ml-1">Email Address</label>
+                    <input 
+                      type="email"
+                      required
+                      placeholder="shop@example.com"
+                      className="w-full bg-[#0f172a]/50 border border-white/5 p-4 rounded-2xl text-white placeholder:text-slate-600 focus:outline-none focus:border-emerald-500/50 transition-all font-medium"
+                      value={registrationData.email}
+                      onChange={(e) => setRegistrationData({...registrationData, email: e.target.value})}
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-slate-500 text-[10px] font-black uppercase tracking-widest ml-1">Subscription Plan</label>
+                    <select 
+                      className="w-full bg-[#0f172a]/50 border border-white/5 p-4 rounded-2xl text-white focus:outline-none focus:border-emerald-500/50 transition-all font-medium appearance-none"
+                      value={registrationData.plan}
+                      onChange={(e) => setRegistrationData({...registrationData, plan: e.target.value as any})}
+                    >
+                      <option value="monthly">Monthly - ₵29</option>
+                      <option value="quarterly">Quarterly - ₵79</option>
+                      <option value="annual">Annual - ₵299</option>
+                    </select>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="space-y-1">
+                      <label className="text-slate-500 text-[10px] font-black uppercase tracking-widest ml-1">Password</label>
+                      <input 
+                        type="password"
+                        required
+                        placeholder="••••••••"
+                        className="w-full bg-[#0f172a]/50 border border-white/5 p-4 rounded-2xl text-white placeholder:text-slate-600 focus:outline-none focus:border-emerald-500/50 transition-all font-medium"
+                        value={registrationData.password}
+                        onChange={(e) => setRegistrationData({...registrationData, password: e.target.value})}
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-slate-500 text-[10px] font-black uppercase tracking-widest ml-1">Confirm</label>
+                      <input 
+                        type="password"
+                        required
+                        placeholder="••••••••"
+                        className="w-full bg-[#0f172a]/50 border border-white/5 p-4 rounded-2xl text-white placeholder:text-slate-600 focus:outline-none focus:border-emerald-500/50 transition-all font-medium"
+                        value={registrationData.confirmPassword}
+                        onChange={(e) => setRegistrationData({...registrationData, confirmPassword: e.target.value})}
+                      />
+                    </div>
+                  </div>
+                  <motion.button
+                    whileHover={{ scale: 1.02 }}
+                    whileTap={{ scale: 0.98 }}
+                    type="submit"
+                    disabled={isSubmittingRegistration}
+                    className="w-full bg-emerald-500 text-white p-5 rounded-2xl font-black shadow-xl shadow-emerald-500/20 transition-all flex items-center justify-center gap-3 mt-4"
+                  >
+                    {isSubmittingRegistration ? <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : "Create My Store"}
+                  </motion.button>
+                  <button 
+                    type="button"
+                    onClick={() => setIsRegistering(false)}
+                    className="w-full py-2 text-slate-500 text-[10px] font-black uppercase tracking-widest hover:text-white transition-colors"
+                  >
+                    Back to Login
+                  </button>
+                </form>
+              ) : (
+                <div className="space-y-6">
+                  <div className="bg-emerald-500/10 border border-emerald-500/20 p-6 rounded-[2rem] text-center space-y-3">
+                    <div className="w-16 h-16 bg-emerald-500 text-white rounded-full flex items-center justify-center mx-auto shadow-lg shadow-emerald-500/20">
+                      <CheckCircle2 size={32} />
+                    </div>
+                    <h3 className="text-xl font-black text-white">Store Created!</h3>
+                    <p className="text-slate-400 text-sm">Your store is ready. Please complete the initial payment to activate your account.</p>
+                  </div>
+
+                  <div className="bg-[#0f172a]/80 border border-white/5 p-6 rounded-[2rem] space-y-4">
+                    <div className="flex justify-between items-center">
+                      <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Payment ID</span>
+                      <span className="text-xs font-mono font-black text-emerald-400">{registrationPaymentInfo?.paymentId}</span>
+                    </div>
+                    <div className="flex justify-between items-center">
+                      <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Amount Due</span>
+                      <span className="text-lg font-black text-white">₵{registrationPaymentInfo?.amount}</span>
+                    </div>
+                    
+                    <div className="h-px bg-white/5 w-full" />
+                    
+                    <div className="space-y-3">
+                      <p className="text-[10px] font-black text-emerald-500 uppercase tracking-widest">Payment Methods</p>
+                      <div className="grid grid-cols-1 gap-3">
+                        <div className="bg-white/5 p-4 rounded-2xl border border-white/5">
+                          <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">MTN / Telecel MoMo</p>
+                          <p className="text-sm font-black text-white">0542361753 / 0207923981</p>
+                          <p className="text-[10px] font-bold text-slate-500">Name: Akwasi Rabbi</p>
+                        </div>
+                        <div className="bg-white/5 p-4 rounded-2xl border border-white/5">
+                          <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Ecobank</p>
+                          <p className="text-sm font-black text-white">1441004209423</p>
+                          <p className="text-[10px] font-bold text-slate-500">Name: Akwasi Rabbi</p>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <p className="text-[10px] text-slate-500 text-center font-bold">
+                    Once paid, our team will verify your payment using the Payment ID and activate your store.
+                  </p>
+
+                  <button 
+                    onClick={() => {
+                      setIsRegistering(false);
+                      setRegistrationStep('form');
+                      setRegistrationPaymentInfo(null);
+                    }}
+                    className="w-full bg-white/5 text-white p-5 rounded-2xl font-black hover:bg-white/10 transition-all"
+                  >
+                    Return to Login
+                  </button>
+                </div>
+              )}
+            </motion.div>
+          ) : (
+            <>
+              <div className="text-center space-y-2 mb-8">
+                <h2 className="text-2xl font-black text-white">Welcome Back</h2>
+                <p className="text-slate-500 text-sm font-bold uppercase tracking-widest">Lucid Hub POS Terminal</p>
+              </div>
+              <motion.form 
+                initial={{ y: 20, opacity: 0 }}
+                animate={{ y: 0, opacity: 1 }}
+                transition={{ delay: 0.2 }}
+                onSubmit={handleLogin} 
+                className="space-y-6"
+              >
               <div className="space-y-2">
                 <label className="text-slate-500 text-[10px] font-black uppercase tracking-widest ml-1">Username</label>
                 <motion.div 
@@ -1051,6 +1335,19 @@ export default function App() {
                 )}
               </motion.button>
             </motion.form>
+          </>
+          )}
+
+          {!isForgotPassword && !isRegistering && (
+            <div className="pt-4 border-t border-white/5 text-center space-y-4">
+              <p className="text-slate-500 text-xs font-bold">Don't have a store yet?</p>
+              <button 
+                onClick={() => setIsRegistering(true)}
+                className="w-full bg-white/5 text-white p-4 rounded-2xl font-black text-sm hover:bg-white/10 transition-all border border-white/5"
+              >
+                Create Your Store Now
+              </button>
+            </div>
           )}
 
           <div className="mt-10 pt-8 border-t border-white/5 text-center">
@@ -1213,81 +1510,136 @@ export default function App() {
           )}
 
           {adminActiveTab === 'payments' && (
-            <div className="space-y-6">
-              <div className="flex justify-between items-end">
-                <div>
-                  <p className="text-[10px] font-black text-emerald-500 uppercase tracking-[0.2em] mb-1">Verification</p>
-                  <h2 className="text-2xl font-black text-slate-900">Subscription Payments</h2>
+            <div className="space-y-8">
+              {/* New Registrations Section */}
+              <div className="space-y-6">
+                <div className="flex justify-between items-end">
+                  <div>
+                    <p className="text-[10px] font-black text-emerald-500 uppercase tracking-[0.2em] mb-1">New Stores</p>
+                    <h2 className="text-2xl font-black text-slate-900">Pending Registrations</h2>
+                  </div>
+                  <div className="bg-white p-2 rounded-xl shadow-sm border border-slate-100 flex items-center gap-2">
+                    <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">{pendingRegistrations.length} Pending</span>
+                  </div>
                 </div>
-                <div className="bg-white p-2 rounded-xl shadow-sm border border-slate-100 flex items-center gap-2">
-                  <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">{pendingSubscriptions.length} Pending</span>
-                </div>
+
+                {pendingRegistrations.length > 0 ? (
+                  <div className="space-y-4">
+                    {pendingRegistrations.map(reg => (
+                      <div key={reg.id} className="bg-white p-6 rounded-[2.5rem] border border-emerald-100 shadow-sm space-y-4">
+                        <div className="flex justify-between items-start">
+                          <div className="flex items-center gap-3">
+                            <div className="w-10 h-10 bg-emerald-50 text-emerald-600 rounded-2xl flex items-center justify-center font-black">
+                              {reg.name?.charAt(0)}
+                            </div>
+                            <div>
+                              <h3 className="font-black text-slate-900">{reg.name}</h3>
+                              <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">{reg.email}</p>
+                            </div>
+                          </div>
+                          <div className="bg-emerald-50 text-emerald-600 text-[9px] font-black px-3 py-1 rounded-full uppercase tracking-widest">New Store</div>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-4">
+                          <div className="bg-slate-50 p-4 rounded-2xl">
+                            <p className="text-[9px] text-slate-400 font-black uppercase tracking-widest mb-1">Plan & Amount</p>
+                            <p className="text-sm font-black text-slate-900 uppercase">{reg.plan} - ₵{reg.amount}</p>
+                          </div>
+                          <div className="bg-slate-50 p-4 rounded-2xl">
+                            <p className="text-[9px] text-slate-400 font-black uppercase tracking-widest mb-1">Payment ID</p>
+                            <p className="text-sm font-mono font-black text-emerald-600">{reg.id}</p>
+                          </div>
+                        </div>
+
+                        <button 
+                          onClick={() => handleApproveRegistration(reg.id)}
+                          className="w-full bg-emerald-500 text-white text-xs font-black py-4 rounded-2xl shadow-xl shadow-emerald-500/20 active:scale-95 transition-all"
+                        >
+                          Verify & Activate Store
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="bg-slate-50/50 border border-dashed border-slate-200 p-8 rounded-[2rem] text-center">
+                    <p className="text-slate-400 text-xs font-bold uppercase tracking-widest">No new store registrations</p>
+                  </div>
+                )}
               </div>
 
-              {pendingSubscriptions.length > 0 ? (
-                <div className="space-y-4">
-                  {pendingSubscriptions.map(sub => (
-                    <div key={sub.id} className="bg-white p-6 rounded-[2.5rem] border border-amber-100 shadow-sm space-y-4">
-                      <div className="flex justify-between items-start">
-                        <div className="flex items-center gap-3">
-                          <div className="w-10 h-10 bg-amber-50 text-amber-600 rounded-2xl flex items-center justify-center font-black">
-                            {sub.tenant_name?.charAt(0)}
-                          </div>
-                          <div>
-                            <h3 className="font-black text-slate-900">{sub.tenant_name}</h3>
-                            <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">{new Date(sub.created_at).toLocaleString()}</p>
-                          </div>
-                        </div>
-                        <div className="bg-amber-50 text-amber-600 text-[9px] font-black px-3 py-1 rounded-full uppercase tracking-widest">Pending</div>
-                      </div>
+              <div className="h-px bg-slate-100 w-full" />
 
-                      <div className="grid grid-cols-2 gap-4">
-                        <div className="bg-slate-50 p-4 rounded-2xl">
-                          <p className="text-[9px] text-slate-400 font-black uppercase tracking-widest mb-1">Plan & Amount</p>
-                          <p className="text-sm font-black text-slate-900 uppercase">{sub.plan} - ₵{sub.amount}</p>
-                        </div>
-                        <div className="bg-slate-50 p-4 rounded-2xl">
-                          <p className="text-[9px] text-slate-400 font-black uppercase tracking-widest mb-1">Method</p>
-                          <p className="text-sm font-black text-slate-900 uppercase">{sub.payment_method}</p>
-                        </div>
-                      </div>
-
-                      <div className="bg-slate-900 p-4 rounded-2xl text-white">
-                        <p className="text-[9px] text-slate-400 font-black uppercase tracking-widest mb-1">Transaction Reference</p>
-                        <p className="text-sm font-mono font-black text-emerald-400 break-all">{sub.reference}</p>
-                      </div>
-
-                      <div className="flex gap-3">
-                        <button 
-                          onClick={() => handleApproveSubscription(sub.id)}
-                          className="flex-1 bg-emerald-500 text-white text-xs font-black py-4 rounded-2xl shadow-xl shadow-emerald-500/20 active:scale-95 transition-all"
-                        >
-                          Approve Subscription
-                        </button>
-                        <button 
-                          onClick={() => {
-                            const reason = prompt('Reason for rejection:');
-                            if (reason) handleRejectSubscription(sub.id, reason);
-                          }}
-                          className="px-6 bg-slate-100 text-slate-500 text-xs font-black py-4 rounded-2xl hover:bg-slate-200 transition-all"
-                        >
-                          Reject
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <div className="bg-white p-12 rounded-[3rem] border border-slate-100 text-center space-y-4">
-                  <div className="w-20 h-20 bg-slate-50 rounded-full flex items-center justify-center mx-auto text-slate-200">
-                    <CheckCircle2 size={40} />
-                  </div>
+              {/* Subscription Renewals Section */}
+              <div className="space-y-6">
+                <div className="flex justify-between items-end">
                   <div>
-                    <h3 className="text-lg font-black text-slate-900">All Caught Up!</h3>
-                    <p className="text-slate-400 text-sm font-bold">No pending subscription payments to verify.</p>
+                    <p className="text-[10px] font-black text-amber-500 uppercase tracking-[0.2em] mb-1">Renewals</p>
+                    <h2 className="text-2xl font-black text-slate-900">Subscription Payments</h2>
+                  </div>
+                  <div className="bg-white p-2 rounded-xl shadow-sm border border-slate-100 flex items-center gap-2">
+                    <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">{pendingSubscriptions.length} Pending</span>
                   </div>
                 </div>
-              )}
+
+                {pendingSubscriptions.length > 0 ? (
+                  <div className="space-y-4">
+                    {pendingSubscriptions.map(sub => (
+                      <div key={sub.id} className="bg-white p-6 rounded-[2.5rem] border border-amber-100 shadow-sm space-y-4">
+                        <div className="flex justify-between items-start">
+                          <div className="flex items-center gap-3">
+                            <div className="w-10 h-10 bg-amber-50 text-amber-600 rounded-2xl flex items-center justify-center font-black">
+                              {sub.tenant_name?.charAt(0)}
+                            </div>
+                            <div>
+                              <h3 className="font-black text-slate-900">{sub.tenant_name}</h3>
+                              <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">{new Date(sub.created_at).toLocaleString()}</p>
+                            </div>
+                          </div>
+                          <div className="bg-amber-50 text-amber-600 text-[9px] font-black px-3 py-1 rounded-full uppercase tracking-widest">Renewal</div>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-4">
+                          <div className="bg-slate-50 p-4 rounded-2xl">
+                            <p className="text-[9px] text-slate-400 font-black uppercase tracking-widest mb-1">Plan & Amount</p>
+                            <p className="text-sm font-black text-slate-900 uppercase">{sub.plan} - ₵{sub.amount}</p>
+                          </div>
+                          <div className="bg-slate-50 p-4 rounded-2xl">
+                            <p className="text-[9px] text-slate-400 font-black uppercase tracking-widest mb-1">Method</p>
+                            <p className="text-sm font-black text-slate-900 uppercase">{sub.payment_method}</p>
+                          </div>
+                        </div>
+
+                        <div className="bg-slate-900 p-4 rounded-2xl text-white">
+                          <p className="text-[9px] text-slate-400 font-black uppercase tracking-widest mb-1">Transaction Reference</p>
+                          <p className="text-sm font-mono font-black text-emerald-400 break-all">{sub.reference}</p>
+                        </div>
+
+                        <div className="flex gap-3">
+                          <button 
+                            onClick={() => handleApproveSubscription(sub.id)}
+                            className="flex-1 bg-emerald-500 text-white text-xs font-black py-4 rounded-2xl shadow-xl shadow-emerald-500/20 active:scale-95 transition-all"
+                          >
+                            Approve Renewal
+                          </button>
+                          <button 
+                            onClick={() => {
+                              const reason = prompt('Reason for rejection:');
+                              if (reason) handleRejectSubscription(sub.id, reason);
+                            }}
+                            className="px-6 bg-slate-100 text-slate-500 text-xs font-black py-4 rounded-2xl hover:bg-slate-200 transition-all"
+                          >
+                            Reject
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="bg-slate-50/50 border border-dashed border-slate-200 p-8 rounded-[2rem] text-center">
+                    <p className="text-slate-400 text-xs font-bold uppercase tracking-widest">No pending renewals</p>
+                  </div>
+                )}
+              </div>
             </div>
           )}
 
@@ -1582,6 +1934,12 @@ export default function App() {
               </motion.div>
             )}
           </AnimatePresence>
+          <button 
+            onClick={() => setIsProfileModalOpen(true)}
+            className="w-10 h-10 bg-slate-100 rounded-xl flex items-center justify-center text-slate-600 hover:bg-emerald-50 hover:text-emerald-600 transition-all border border-slate-200"
+          >
+            <Users size={20} />
+          </button>
           {currentUser?.role !== 'staff' && (
             <button 
               onClick={() => {
@@ -1712,6 +2070,34 @@ export default function App() {
                       <p className="text-xl font-black text-slate-900">₵{detailedStats?.totalSales.monthly.toFixed(2) || '0.00'}</p>
                     </motion.div>
                   </div>
+
+                  {/* Daily Summary Section */}
+                  <div className="grid grid-cols-2 gap-4">
+                    <motion.div 
+                      initial={{ opacity: 0, y: 20 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ delay: 0.15 }}
+                      className="bg-white p-5 rounded-[2rem] shadow-sm border border-slate-100"
+                    >
+                      <div className="w-10 h-10 bg-emerald-50 text-emerald-500 rounded-2xl flex items-center justify-center mb-3">
+                        <BarChart3 size={20} />
+                      </div>
+                      <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Avg Order</p>
+                      <p className="text-xl font-black text-slate-900">₵{detailedStats?.totalSales.avgOrder?.toFixed(2) || '0.00'}</p>
+                    </motion.div>
+                    <motion.div 
+                      initial={{ opacity: 0, y: 20 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ delay: 0.25 }}
+                      className="bg-white p-5 rounded-[2rem] shadow-sm border border-slate-100"
+                    >
+                      <div className="w-10 h-10 bg-amber-50 text-amber-500 rounded-2xl flex items-center justify-center mb-3">
+                        <ShoppingCart size={20} />
+                      </div>
+                      <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Total Orders</p>
+                      <p className="text-xl font-black text-slate-900">{detailedStats?.totalSales.count || 0}</p>
+                    </motion.div>
+                  </div>
                 </div>
 
                 {/* Sales Trend Chart */}
@@ -1829,6 +2215,37 @@ export default function App() {
                       )}
                     </div>
                   </motion.div>
+
+                  {/* Category Performance */}
+                  {detailedStats?.categories && detailedStats.categories.length > 0 && (
+                    <motion.div 
+                      initial={{ opacity: 0, y: 20 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ delay: 0.45 }}
+                      className="bg-white p-6 rounded-[2.5rem] shadow-sm border border-slate-100"
+                    >
+                      <h3 className="text-sm font-black text-slate-900 uppercase tracking-widest mb-6">Category Distribution</h3>
+                      <div className="space-y-4">
+                        {detailedStats.categories.slice(0, 4).map((cat, idx) => (
+                          <div key={idx} className="flex items-center gap-3">
+                            <div className="flex-1">
+                              <div className="flex justify-between items-center mb-1">
+                                <p className="text-[10px] font-black text-slate-600 uppercase tracking-widest">{cat.name}</p>
+                                <p className="text-[10px] font-black text-slate-900">₵{cat.value.toFixed(2)}</p>
+                              </div>
+                              <div className="w-full bg-slate-100 h-1.5 rounded-full overflow-hidden">
+                                <motion.div 
+                                  initial={{ width: 0 }}
+                                  animate={{ width: `${(cat.value / detailedStats.categories![0].value) * 100}%` }}
+                                  className="h-full bg-blue-500 rounded-full"
+                                />
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </motion.div>
+                  )}
 
                   {/* Recent Activity */}
                   <motion.div 
@@ -2093,8 +2510,9 @@ export default function App() {
                                     setIsProductModalOpen(true);
                                   }}
                                   className="p-1.5 text-slate-400 hover:text-emerald-500 transition-colors"
+                                  title="Edit Product"
                                 >
-                                  <Settings size={16} />
+                                  <Pencil size={16} />
                                 </button>
                                 <button 
                                   onClick={() => handleDeleteProduct(p.id)}
@@ -2324,7 +2742,13 @@ export default function App() {
         <NavButton active={activeTab === 'history'} onClick={() => setActiveTab('history')} icon={<History size={20} />} label="History" />
         {currentUser?.role !== 'staff' && (
           <>
-            <NavButton active={activeTab === 'inventory'} onClick={() => setActiveTab('inventory')} icon={<Package size={20} />} label="Stock" />
+            <NavButton 
+              active={activeTab === 'inventory'} 
+              onClick={() => setActiveTab('inventory')} 
+              icon={<Package size={20} />} 
+              label="Stock" 
+              badge={products.some(p => p.stock <= p.low_stock_threshold)}
+            />
             <NavButton active={activeTab === 'settings'} onClick={() => setActiveTab('settings')} icon={<Settings size={20} />} label="Settings" />
           </>
         )}
@@ -2812,6 +3236,71 @@ export default function App() {
           </>
         )}
       </AnimatePresence>
+      {/* User Profile Modal */}
+      <AnimatePresence>
+        {isProfileModalOpen && (
+          <>
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setIsProfileModalOpen(false)}
+              className="absolute inset-0 bg-slate-900/60 backdrop-blur-md z-[100]"
+            />
+            <motion.div 
+              initial={{ y: '100%' }}
+              animate={{ y: 0 }}
+              exit={{ y: '100%' }}
+              className="absolute bottom-0 left-0 right-0 bg-white rounded-t-[2.5rem] shadow-2xl z-[100] p-8 space-y-6"
+            >
+              <div className="text-center">
+                <h2 className="text-2xl font-black text-slate-900">User Profile</h2>
+                <p className="text-slate-500 text-sm">Update your personal information</p>
+              </div>
+
+              <form onSubmit={handleUpdateProfile} className="space-y-4">
+                <div>
+                  <label className="text-slate-400 text-[10px] font-bold uppercase tracking-widest mb-2 block">Username</label>
+                  <input 
+                    type="text"
+                    required
+                    className="w-full bg-slate-50 border border-slate-100 p-4 rounded-2xl text-slate-900 font-bold focus:outline-none focus:border-emerald-500 transition-all"
+                    value={profileData.username}
+                    onChange={(e) => setProfileData({...profileData, username: e.target.value})}
+                  />
+                </div>
+                <div>
+                  <label className="text-slate-400 text-[10px] font-bold uppercase tracking-widest mb-2 block">Email Address</label>
+                  <input 
+                    type="email"
+                    required
+                    className="w-full bg-slate-50 border border-slate-100 p-4 rounded-2xl text-slate-900 font-bold focus:outline-none focus:border-emerald-500 transition-all"
+                    value={profileData.email}
+                    onChange={(e) => setProfileData({...profileData, email: e.target.value})}
+                  />
+                </div>
+                <div className="flex gap-3 pt-4">
+                  <button 
+                    type="button"
+                    onClick={() => setIsProfileModalOpen(false)}
+                    className="flex-1 py-4 text-slate-400 font-bold text-sm"
+                  >
+                    Cancel
+                  </button>
+                  <button 
+                    type="submit"
+                    disabled={isUpdatingProfile}
+                    className="flex-1 bg-emerald-500 text-white py-4 rounded-2xl font-black shadow-lg shadow-emerald-500/20 flex items-center justify-center gap-2"
+                  >
+                    {isUpdatingProfile ? 'Updating...' : 'Update Profile'}
+                  </button>
+                </div>
+              </form>
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
+
       {/* Product Management Modal */}
       <AnimatePresence>
         {isProductModalOpen && (
@@ -2888,6 +3377,16 @@ export default function App() {
                     onChange={(e) => setEditingProduct({...editingProduct, category: e.target.value})}
                   />
                 </div>
+                <div>
+                  <label className="text-slate-400 text-[10px] font-bold uppercase tracking-widest mb-2 block">Image URL</label>
+                  <input 
+                    type="text"
+                    placeholder="https://picsum.photos/200"
+                    className="w-full bg-slate-50 border border-slate-200 p-4 rounded-2xl text-slate-900 focus:outline-none focus:border-emerald-500 transition-all"
+                    value={editingProduct?.image || ''}
+                    onChange={(e) => setEditingProduct({...editingProduct, image: e.target.value})}
+                  />
+                </div>
                 <div className="flex gap-3 pt-4">
                   <button 
                     type="button"
@@ -2912,15 +3411,18 @@ export default function App() {
   );
 }
 
-function NavButton({ active, onClick, icon, label }: { active: boolean, onClick: () => void, icon: ReactNode, label: string }) {
+function NavButton({ active, onClick, icon, label, badge }: { active: boolean, onClick: () => void, icon: ReactNode, label: string, badge?: boolean }) {
   return (
     <button 
       onClick={onClick}
-      className={`flex flex-col items-center gap-1 transition-all ${active ? 'text-emerald-600' : 'text-slate-400 hover:text-slate-600'}`}
+      className={`flex flex-col items-center gap-1 transition-all relative ${active ? 'text-emerald-600' : 'text-slate-400 hover:text-slate-600'}`}
     >
       <div className={`p-1 rounded-xl transition-all ${active ? 'bg-emerald-50' : ''}`}>
         {icon}
       </div>
+      {badge && (
+        <span className="absolute top-0 right-1 w-2 h-2 bg-red-500 rounded-full border border-white animate-pulse"></span>
+      )}
       <span className="text-[9px] font-black uppercase tracking-widest">{label}</span>
     </button>
   );
