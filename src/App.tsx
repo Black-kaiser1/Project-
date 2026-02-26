@@ -14,6 +14,7 @@ import {
   X,
   Store,
   AlertTriangle,
+  AlertCircle,
   Lock,
   Calendar,
   LogOut,
@@ -105,7 +106,9 @@ export default function App() {
   const [newTenant, setNewTenant] = useState({ name: '', email: '', plan: 'monthly' as any, expiry_days: 30, password: 'password123' });
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [syncError, setSyncError] = useState<string | null>(null);
   const [showLowStockOnly, setShowLowStockOnly] = useState(false);
+  const [productToDelete, setProductToDelete] = useState<number | null>(null);
 
   useEffect(() => {
     const handleOnline = () => setIsOnline(true);
@@ -168,9 +171,12 @@ export default function App() {
     if (pendingTransactions.length === 0) return;
 
     setIsSyncing(true);
+    setSyncError(null);
     console.log(`Syncing ${pendingTransactions.length} offline transactions...`);
 
     const remaining = [];
+    let errorCount = 0;
+
     for (const tx of pendingTransactions) {
       try {
         const res = await fetch('/api/transactions', {
@@ -178,9 +184,13 @@ export default function App() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(tx)
         });
-        if (!res.ok) remaining.push(tx);
+        if (!res.ok) {
+          remaining.push(tx);
+          errorCount++;
+        }
       } catch (e) {
         remaining.push(tx);
+        errorCount++;
       }
     }
 
@@ -190,8 +200,10 @@ export default function App() {
       fetchDetailedStats();
       fetchTransactions();
       fetchProducts();
+      setSyncError(null);
     } else {
       localStorage.setItem(`offline_tx_${currentTenant.id}`, JSON.stringify(remaining));
+      setSyncError(`Failed to sync ${errorCount} transaction(s). Please check your connection.`);
     }
     
     setIsSyncing(false);
@@ -488,10 +500,16 @@ export default function App() {
     const method = editingProduct.id ? 'PATCH' : 'POST';
     const url = editingProduct.id ? `/api/products/${editingProduct.id}` : '/api/products';
     
+    const productToSave = { 
+      ...editingProduct, 
+      tenant_id: currentTenant.id,
+      image: editingProduct.image || `https://picsum.photos/seed/${encodeURIComponent(editingProduct.name || Date.now().toString())}/200`
+    };
+    
     const res = await fetch(url, {
       method,
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...editingProduct, tenant_id: currentTenant.id })
+      body: JSON.stringify(productToSave)
     });
 
     if (res.ok) {
@@ -502,11 +520,16 @@ export default function App() {
   };
 
   const handleDeleteProduct = async (id: number) => {
-    if (!confirm('Are you sure you want to delete this product?')) return;
-    const res = await fetch(`/api/products/${id}`, { method: 'DELETE' });
+    setProductToDelete(id);
+  };
+
+  const confirmDeleteProduct = async () => {
+    if (!productToDelete) return;
+    const res = await fetch(`/api/products/${productToDelete}`, { method: 'DELETE' });
     if (res.ok) {
       fetchProducts();
     }
+    setProductToDelete(null);
   };
 
   const fetchTenants = async () => {
@@ -562,6 +585,20 @@ export default function App() {
       fetchPendingSubscriptions();
       fetchTenants();
       fetchAdminStats();
+    }
+  };
+
+  const handleApproveSubscriptionManual = async (tenantId: number, plan: string, amount: number, days: number) => {
+    const res = await fetch('/api/admin/subscriptions/manual', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tenantId, plan, amount, days })
+    });
+    if (res.ok) {
+      fetchTenants();
+      fetchAdminStats();
+      setShowSuccess(true);
+      setTimeout(() => setShowSuccess(false), 3000);
     }
   };
 
@@ -805,9 +842,9 @@ export default function App() {
 
   const handleRenew = (planId: string) => {
     const plans = {
-      monthly: { id: 'monthly', title: 'Monthly', price: 29 },
-      quarterly: { id: 'quarterly', title: 'Quarterly', price: 79 },
-      annual: { id: 'annual', title: 'Annual', price: 299 }
+      monthly: { id: 'monthly', title: 'Monthly', price: 150 },
+      quarterly: { id: 'quarterly', title: 'Quarterly', price: 450 },
+      annual: { id: 'annual', title: 'Yearly', price: 1800 }
     };
     setSelectedPlan(plans[planId as keyof typeof plans]);
     setPaymentStep('pay');
@@ -1154,9 +1191,9 @@ export default function App() {
                       value={registrationData.plan}
                       onChange={(e) => setRegistrationData({...registrationData, plan: e.target.value as any})}
                     >
-                      <option value="monthly">Monthly - ₵29</option>
-                      <option value="quarterly">Quarterly - ₵79</option>
-                      <option value="annual">Annual - ₵299</option>
+                      <option value="monthly">Monthly - ₵150</option>
+                      <option value="quarterly">Quarterly - ₵450</option>
+                      <option value="annual">Yearly - ₵1800</option>
                     </select>
                   </div>
                   <div className="grid grid-cols-2 gap-3">
@@ -1480,6 +1517,21 @@ export default function App() {
                       </div>
                     </div>
                     <div className="flex items-center gap-2">
+                      <button 
+                        onClick={() => {
+                          const plan = prompt('Select Plan (monthly, quarterly, annual):', 'monthly');
+                          if (!plan) return;
+                          const days = plan === 'annual' ? 365 : plan === 'quarterly' ? 90 : 30;
+                          const amount = plan === 'annual' ? 1800 : plan === 'quarterly' ? 450 : 150;
+                          if (confirm(`Manually upgrade ${tenant.name} to ${plan} plan for ₵${amount}?`)) {
+                            handleApproveSubscriptionManual(tenant.id, plan, amount, days);
+                          }
+                        }}
+                        title="Manual Upgrade/Renew"
+                        className="p-2 bg-slate-50 text-slate-400 hover:text-emerald-500 transition-colors rounded-xl"
+                      >
+                        <CreditCard size={18} />
+                      </button>
                       <button 
                         onClick={() => handleAdminResetTenantPassword(tenant.id)}
                         title="Reset Admin Password"
@@ -1811,6 +1863,48 @@ export default function App() {
               </motion.div>
             </>
           )}
+          {productToDelete && (
+            <>
+              <motion.div 
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                onClick={() => setProductToDelete(null)}
+                className="absolute inset-0 bg-slate-900/60 backdrop-blur-md z-[110]"
+              />
+              <motion.div 
+                initial={{ scale: 0.9, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                exit={{ scale: 0.9, opacity: 0 }}
+                className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[85%] bg-white rounded-[2.5rem] shadow-2xl z-[110] p-8 space-y-6"
+              >
+                <div className="text-center">
+                  <div className="w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                    <AlertTriangle size={32} className="text-red-500" />
+                  </div>
+                  <h3 className="text-xl font-black text-slate-900">Delete Product?</h3>
+                  <p className="text-slate-500 text-sm mt-2">
+                    Are you sure you want to delete <span className="font-bold text-slate-800">{products.find(p => p.id === productToDelete)?.name}</span>? This action cannot be undone.
+                  </p>
+                </div>
+
+                <div className="flex gap-3">
+                  <button 
+                    onClick={() => setProductToDelete(null)}
+                    className="flex-1 py-4 bg-slate-100 text-slate-500 font-bold rounded-2xl hover:bg-slate-200 transition-all"
+                  >
+                    Cancel
+                  </button>
+                  <button 
+                    onClick={confirmDeleteProduct}
+                    className="flex-1 py-4 bg-red-500 text-white font-black rounded-2xl shadow-lg shadow-red-500/20 hover:bg-red-600 transition-all"
+                  >
+                    Delete
+                  </button>
+                </div>
+              </motion.div>
+            </>
+          )}
         </AnimatePresence>
 
         {/* Payment Simulation Modal */}
@@ -1931,6 +2025,33 @@ export default function App() {
               >
                 <CloudUpload size={14} className="animate-bounce" />
                 <span>Syncing Data</span>
+              </motion.div>
+            )}
+            {syncError && (
+              <motion.div 
+                initial={{ opacity: 0, scale: 0.8 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.8 }}
+                className="flex items-center gap-2 bg-amber-50 text-amber-600 px-3 py-1.5 rounded-xl text-[10px] font-black uppercase border border-amber-100 shadow-sm shadow-amber-500/5"
+              >
+                <div className="flex items-center gap-1.5">
+                  <AlertCircle size={14} />
+                  <span>Sync Failed</span>
+                </div>
+                <div className="flex items-center gap-2 border-l border-amber-200 pl-2 ml-1">
+                  <button 
+                    onClick={() => syncOfflineTransactions()}
+                    className="hover:text-amber-800 transition-colors"
+                  >
+                    Retry
+                  </button>
+                  <button 
+                    onClick={() => setSyncError(null)}
+                    className="hover:text-amber-800 transition-colors"
+                  >
+                    <X size={12} />
+                  </button>
+                </div>
               </motion.div>
             )}
           </AnimatePresence>
@@ -2434,7 +2555,7 @@ export default function App() {
                     </button>
                     <button 
                       onClick={() => {
-                        setEditingProduct({ name: '', price: 0, category: '', stock: 0, low_stock_threshold: 5 });
+                        setEditingProduct({ name: '', price: 0, category: '', stock: 0, low_stock_threshold: 5, image: '' });
                         setIsProductModalOpen(true);
                       }}
                       className="p-2 bg-emerald-500 text-white rounded-xl shadow-lg shadow-emerald-500/20"
@@ -2475,8 +2596,15 @@ export default function App() {
                         (showLowStockOnly ? products.filter(p => p.stock <= p.low_stock_threshold) : products).map(p => (
                           <tr key={p.id}>
                             <td className="px-4 py-3">
-                              <p className="font-bold text-slate-800">{p.name}</p>
-                              <p className="text-[9px] text-slate-400 font-bold uppercase tracking-tighter">${p.price.toFixed(2)}</p>
+                              <div className="flex items-center gap-3">
+                                <div className="w-8 h-8 rounded-lg overflow-hidden bg-slate-100 flex-shrink-0">
+                                  <img src={p.image} alt={p.name} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                                </div>
+                                <div>
+                                  <p className="font-bold text-slate-800">{p.name}</p>
+                                  <p className="text-[9px] text-slate-400 font-bold uppercase tracking-tighter">${p.price.toFixed(2)}</p>
+                                </div>
+                              </div>
                             </td>
                             <td className="px-4 py-3">
                               <div className="flex items-center gap-3">
@@ -2847,20 +2975,20 @@ export default function App() {
                   <div className="space-y-3">
                     <PlanOption 
                       title="Monthly" 
-                      price="₵29.00" 
+                      price="₵150.00" 
                       period="/mo" 
                       onClick={() => handleRenew('monthly')} 
                     />
                     <PlanOption 
                       title="Quarterly" 
-                      price="₵79.00" 
+                      price="₵450.00" 
                       period="/3mo" 
                       onClick={() => handleRenew('quarterly')} 
                       best
                     />
                     <PlanOption 
-                      title="Annual" 
-                      price="₵299.00" 
+                      title="Yearly" 
+                      price="₵1800.00" 
                       period="/yr" 
                       onClick={() => handleRenew('annual')} 
                     />
@@ -3073,7 +3201,11 @@ export default function App() {
               </div>
               <div>
                 <h3 className="text-xl font-black text-slate-900">Success!</h3>
-                <p className="text-xs text-slate-500 font-medium">Transaction has been recorded successfully.</p>
+                <p className="text-xs text-slate-500 font-medium">
+                  {lastTransaction?.isOffline 
+                    ? "Transaction saved offline. It will sync when you're back online." 
+                    : "Transaction has been recorded successfully."}
+                </p>
               </div>
               {lastTransaction && (
                 <button 

@@ -328,8 +328,8 @@ async function startServer() {
       return res.status(400).json({ error: "Email already registered" });
     }
 
-    const expiry_days = 30; // Default trial/initial period
-    const amount = plan === 'annual' ? 299 : plan === 'quarterly' ? 79 : 29;
+    const expiry_days = plan === 'annual' ? 365 : plan === 'quarterly' ? 90 : 30;
+    const amount = plan === 'annual' ? 1800 : plan === 'quarterly' ? 450 : 150;
     const paymentId = `REG-${Math.random().toString(36).substr(2, 9).toUpperCase()}`;
     
     db.prepare("INSERT INTO pending_payments (id, name, email, plan, expiry_days, amount, password) VALUES (?, ?, ?, ?, ?, ?, ?)").run(
@@ -702,6 +702,33 @@ async function startServer() {
     res.json({ success: true });
   });
 
+  app.post("/api/admin/subscriptions/manual", (req, res) => {
+    const { tenantId, plan, amount, days } = req.body;
+    
+    const tenant = db.prepare("SELECT expiry_date FROM tenants WHERE id = ?").get(tenantId) as any;
+    if (!tenant) return res.status(404).json({ error: "Tenant not found" });
+
+    let currentExpiry = new Date(tenant.expiry_date);
+    if (currentExpiry < new Date()) currentExpiry = new Date();
+    currentExpiry.setDate(currentExpiry.getDate() + days);
+
+    db.prepare("UPDATE tenants SET plan = ?, expiry_date = ?, status = 'active' WHERE id = ?").run(
+      plan, currentExpiry.toISOString(), tenantId
+    );
+
+    // Record as an approved payment
+    db.prepare("INSERT INTO subscription_payments (tenant_id, plan, amount, payment_method, reference, status) VALUES (?, ?, ?, ?, ?, ?)").run(
+      tenantId, plan, amount, 'Manual (Admin)', 'ADMIN_MANUAL_UPGRADE', 'approved'
+    );
+
+    // Notify tenant
+    db.prepare("INSERT INTO notifications (tenant_id, message, type) VALUES (?, ?, ?)").run(
+      tenantId, `Your subscription has been manually upgraded to ${plan} by Admin! New expiry: ${currentExpiry.toLocaleDateString()}`, 'success'
+    );
+
+    res.json({ success: true });
+  });
+
   app.post("/api/admin/subscriptions/reject", (req, res) => {
     const { paymentId, reason } = req.body;
     db.prepare("UPDATE subscription_payments SET status = 'rejected' WHERE id = ?").run(paymentId);
@@ -762,7 +789,7 @@ async function startServer() {
 
   app.post("/api/admin/tenants/init-payment", (req, res) => {
     const { name, email, plan, expiry_days, password } = req.body;
-    const amount = plan === 'annual' ? 299 : plan === 'quarterly' ? 79 : 29;
+    const amount = plan === 'annual' ? 1800 : plan === 'quarterly' ? 450 : 150;
     const paymentId = `PAY-${Math.random().toString(36).substr(2, 9).toUpperCase()}`;
     
     db.prepare("INSERT INTO pending_payments (id, name, email, plan, expiry_days, amount, password) VALUES (?, ?, ?, ?, ?, ?, ?)").run(
