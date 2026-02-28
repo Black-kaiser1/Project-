@@ -109,6 +109,8 @@ export default function App() {
   const [syncError, setSyncError] = useState<string | null>(null);
   const [showLowStockOnly, setShowLowStockOnly] = useState(false);
   const [productToDelete, setProductToDelete] = useState<number | null>(null);
+  const [isBulkUpdateMode, setIsBulkUpdateMode] = useState(false);
+  const [bulkStockData, setBulkStockData] = useState<Record<number, number>>({});
 
   useEffect(() => {
     const handleOnline = () => setIsOnline(true);
@@ -490,6 +492,35 @@ export default function App() {
     });
     if (res.ok) {
       fetchProducts();
+    }
+  };
+
+  const handleBulkUpdate = async () => {
+    setIsSyncing(true);
+    try {
+      const updates = Object.entries(bulkStockData).map(([id, stock]) => ({
+        id: parseInt(id),
+        stock
+      }));
+
+      // We'll update them one by one for simplicity as the backend might not have a bulk endpoint
+      // but we'll use Promise.all to make it faster
+      await Promise.all(updates.map(update => 
+        fetch(`/api/products/${update.id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ stock: update.stock })
+        })
+      ));
+
+      fetchProducts();
+      setIsBulkUpdateMode(false);
+      setBulkStockData({});
+    } catch (error) {
+      console.error('Bulk update failed:', error);
+      setSyncError('Failed to update some products');
+    } finally {
+      setIsSyncing(false);
     }
   };
 
@@ -1028,7 +1059,7 @@ export default function App() {
 
   if (view === 'login') {
     return (
-      <div className="flex flex-col h-screen max-w-md mx-auto bg-[#0f172a] overflow-hidden shadow-2xl p-8 justify-center relative">
+      <div className="flex flex-col min-h-screen w-full md:max-w-md mx-auto bg-[#0f172a] overflow-hidden shadow-2xl p-6 sm:p-8 justify-center relative">
         {/* Background Glow */}
         <div className="absolute top-1/4 left-1/2 -translate-x-1/2 w-64 h-64 bg-emerald-500/10 blur-[100px] rounded-full pointer-events-none" />
         
@@ -1415,7 +1446,7 @@ export default function App() {
 
   if (view === 'admin') {
     return (
-      <div className="flex flex-col h-screen max-w-md mx-auto bg-slate-50 overflow-hidden shadow-2xl relative">
+      <div className="flex flex-col h-screen w-full md:max-w-4xl mx-auto bg-slate-50 overflow-hidden shadow-2xl relative">
         <header className="bg-slate-900 px-6 py-6 border-b border-slate-800 flex justify-between items-center shrink-0">
           <div>
             <h1 className="text-xl font-black text-white">Super Admin</h1>
@@ -1767,7 +1798,7 @@ export default function App() {
                 initial={{ y: '100%' }}
                 animate={{ y: 0 }}
                 exit={{ y: '100%' }}
-                className="absolute bottom-0 left-0 right-0 bg-white rounded-t-[2.5rem] shadow-2xl z-[100] p-8 space-y-6"
+                className="absolute bottom-0 left-0 right-0 md:bottom-auto md:top-1/2 md:left-1/2 md:-translate-x-1/2 md:-translate-y-1/2 md:rounded-[2.5rem] md:w-[480px] bg-white rounded-t-[2.5rem] shadow-2xl z-[100] p-8 space-y-6"
               >
                 <div className="text-center">
                   <h2 className="text-2xl font-black text-slate-900">New Tenant Store</h2>
@@ -1976,7 +2007,7 @@ export default function App() {
   }
 
   return (
-    <div className="flex flex-col h-screen max-w-md mx-auto bg-slate-50 overflow-hidden shadow-2xl relative">
+    <div className="flex flex-col h-screen w-full md:max-w-5xl mx-auto bg-slate-50 overflow-hidden shadow-2xl relative">
       {/* Subscription Warning Banner */}
       {subscriptionStatus?.isWarning && !subscriptionStatus.isExpired && (
         <div className={`px-4 py-2 flex items-center justify-between gap-3 text-xs font-bold ${
@@ -2192,8 +2223,7 @@ export default function App() {
                     </motion.div>
                   </div>
 
-                  {/* Daily Summary Section */}
-                  <div className="grid grid-cols-2 gap-4">
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
                     <motion.div 
                       initial={{ opacity: 0, y: 20 }}
                       animate={{ opacity: 1, y: 0 }}
@@ -2451,7 +2481,7 @@ export default function App() {
                   />
                 </div>
 
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
                   {filteredProducts.map(product => (
                     <motion.button
                       whileTap={{ scale: 0.97 }}
@@ -2547,21 +2577,51 @@ export default function App() {
                   </div>
                   <div className="flex gap-2">
                     <button 
-                      onClick={() => setShowLowStockOnly(!showLowStockOnly)}
-                      className={`p-2 rounded-xl border transition-all flex items-center gap-2 text-[10px] font-black uppercase tracking-widest ${showLowStockOnly ? 'bg-red-50 border-red-200 text-red-600' : 'bg-white border-slate-200 text-slate-500'}`}
-                    >
-                      <AlertTriangle size={14} />
-                      {showLowStockOnly ? 'Showing Low Stock' : 'Filter Low Stock'}
-                    </button>
-                    <button 
                       onClick={() => {
-                        setEditingProduct({ name: '', price: 0, category: '', stock: 0, low_stock_threshold: 5, image: '' });
-                        setIsProductModalOpen(true);
+                        if (isBulkUpdateMode) {
+                          setIsBulkUpdateMode(false);
+                          setBulkStockData({});
+                        } else {
+                          setIsBulkUpdateMode(true);
+                          const initialData: Record<number, number> = {};
+                          products.forEach(p => initialData[p.id] = p.stock);
+                          setBulkStockData(initialData);
+                        }
                       }}
-                      className="p-2 bg-emerald-500 text-white rounded-xl shadow-lg shadow-emerald-500/20"
+                      className={`p-2 rounded-xl border transition-all flex items-center gap-2 text-[10px] font-black uppercase tracking-widest ${isBulkUpdateMode ? 'bg-slate-900 text-white border-slate-900' : 'bg-white border-slate-200 text-slate-500'}`}
                     >
-                      <Plus size={20} />
+                      {isBulkUpdateMode ? 'Cancel' : 'Bulk Edit'}
                     </button>
+                    {isBulkUpdateMode && (
+                      <button 
+                        onClick={handleBulkUpdate}
+                        disabled={isSyncing}
+                        className="p-2 bg-emerald-500 text-white rounded-xl shadow-lg shadow-emerald-500/20 flex items-center gap-2 text-[10px] font-black uppercase tracking-widest disabled:opacity-50"
+                      >
+                        <CheckCircle2 size={14} />
+                        Save All
+                      </button>
+                    )}
+                    {!isBulkUpdateMode && (
+                      <>
+                        <button 
+                          onClick={() => setShowLowStockOnly(!showLowStockOnly)}
+                          className={`p-2 rounded-xl border transition-all flex items-center gap-2 text-[10px] font-black uppercase tracking-widest ${showLowStockOnly ? 'bg-red-50 border-red-200 text-red-600' : 'bg-white border-slate-200 text-slate-500'}`}
+                        >
+                          <AlertTriangle size={14} />
+                          {showLowStockOnly ? 'Showing Low Stock' : 'Filter Low Stock'}
+                        </button>
+                        <button 
+                          onClick={() => {
+                            setEditingProduct({ name: '', price: 0, category: '', stock: 0, low_stock_threshold: 5, image: '' });
+                            setIsProductModalOpen(true);
+                          }}
+                          className="p-2 bg-emerald-500 text-white rounded-xl shadow-lg shadow-emerald-500/20"
+                        >
+                          <Plus size={20} />
+                        </button>
+                      </>
+                    )}
                   </div>
                 </div>
 
@@ -2576,7 +2636,7 @@ export default function App() {
                   </div>
                 </div>
 
-                <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+                <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-x-auto">
                   <table className="w-full text-xs">
                     <thead className="bg-slate-50 text-slate-500 text-left">
                       <tr>
@@ -2608,47 +2668,60 @@ export default function App() {
                             </td>
                             <td className="px-4 py-3">
                               <div className="flex items-center gap-3">
-                                <span className={`px-2 py-0.5 rounded-full text-[9px] font-black ${p.stock <= p.low_stock_threshold ? 'bg-red-100 text-red-600' : 'bg-emerald-100 text-emerald-600'}`}>
-                                  {p.stock} UNITS
-                                </span>
-                                <div className="flex gap-1">
-                                  <button 
-                                    onClick={() => handleAdjustStock(p.id, -1)}
-                                    className="w-6 h-6 flex items-center justify-center bg-slate-100 text-slate-600 rounded-md hover:bg-slate-200 transition-colors"
-                                  >
-                                    <Minus size={12} />
-                                  </button>
-                                  <button 
-                                    onClick={() => handleAdjustStock(p.id, 1)}
-                                    className="w-6 h-6 flex items-center justify-center bg-slate-100 text-slate-600 rounded-md hover:bg-slate-200 transition-colors"
-                                  >
-                                    <Plus size={12} />
-                                  </button>
-                                </div>
+                                {isBulkUpdateMode ? (
+                                  <input 
+                                    type="number"
+                                    className="w-20 bg-slate-50 border border-slate-200 p-2 rounded-lg text-slate-900 focus:outline-none focus:border-emerald-500 transition-all text-xs font-black"
+                                    value={bulkStockData[p.id] ?? p.stock}
+                                    onChange={(e) => setBulkStockData({ ...bulkStockData, [p.id]: parseInt(e.target.value) || 0 })}
+                                  />
+                                ) : (
+                                  <>
+                                    <span className={`px-2 py-0.5 rounded-full text-[9px] font-black ${p.stock <= p.low_stock_threshold ? 'bg-red-100 text-red-600' : 'bg-emerald-100 text-emerald-600'}`}>
+                                      {p.stock} UNITS
+                                    </span>
+                                    <div className="flex gap-1">
+                                      <button 
+                                        onClick={() => handleAdjustStock(p.id, -1)}
+                                        className="w-6 h-6 flex items-center justify-center bg-slate-100 text-slate-600 rounded-md hover:bg-slate-200 transition-colors"
+                                      >
+                                        <Minus size={12} />
+                                      </button>
+                                      <button 
+                                        onClick={() => handleAdjustStock(p.id, 1)}
+                                        className="w-6 h-6 flex items-center justify-center bg-slate-100 text-slate-600 rounded-md hover:bg-slate-200 transition-colors"
+                                      >
+                                        <Plus size={12} />
+                                      </button>
+                                    </div>
+                                  </>
+                                )}
                               </div>
-                              {p.stock <= p.low_stock_threshold && (
+                              {p.stock <= p.low_stock_threshold && !isBulkUpdateMode && (
                                 <p className="text-[8px] text-red-500 font-bold uppercase mt-1">Below threshold ({p.low_stock_threshold})</p>
                               )}
                             </td>
                             <td className="px-4 py-3 text-right">
-                              <div className="flex justify-end gap-2">
-                                <button 
-                                  onClick={() => {
-                                    setEditingProduct(p);
-                                    setIsProductModalOpen(true);
-                                  }}
-                                  className="p-1.5 text-slate-400 hover:text-emerald-500 transition-colors"
-                                  title="Edit Product"
-                                >
-                                  <Pencil size={16} />
-                                </button>
-                                <button 
-                                  onClick={() => handleDeleteProduct(p.id)}
-                                  className="p-1.5 text-slate-400 hover:text-red-500 transition-colors"
-                                >
-                                  <Trash size={16} />
-                                </button>
-                              </div>
+                              {!isBulkUpdateMode && (
+                                <div className="flex justify-end gap-2">
+                                  <button 
+                                    onClick={() => {
+                                      setEditingProduct(p);
+                                      setIsProductModalOpen(true);
+                                    }}
+                                    className="p-1.5 text-slate-400 hover:text-emerald-500 transition-colors"
+                                    title="Edit Product"
+                                  >
+                                    <Pencil size={16} />
+                                  </button>
+                                  <button 
+                                    onClick={() => handleDeleteProduct(p.id)}
+                                    className="p-1.5 text-slate-400 hover:text-red-500 transition-colors"
+                                  >
+                                    <Trash size={16} />
+                                  </button>
+                                </div>
+                              )}
                             </td>
                           </tr>
                         ))
@@ -2862,7 +2935,7 @@ export default function App() {
       </main>
 
       {/* Bottom Navigation */}
-      <nav className="fixed bottom-0 left-0 right-0 max-w-md mx-auto bg-white/80 backdrop-blur-lg border-t border-slate-200 px-6 py-3 flex justify-between items-center z-40">
+      <nav className="fixed bottom-0 left-0 right-0 w-full md:max-w-5xl mx-auto bg-white/80 backdrop-blur-lg border-t border-slate-200 px-6 py-3 flex justify-between items-center z-40">
         {currentUser?.role !== 'staff' && (
           <NavButton active={activeTab === 'dashboard'} onClick={() => setActiveTab('dashboard')} icon={<LayoutDashboard size={20} />} label="Home" />
         )}
@@ -2963,7 +3036,7 @@ export default function App() {
               initial={{ y: '100%' }}
               animate={{ y: 0 }}
               exit={{ y: '100%' }}
-              className="absolute bottom-0 left-0 right-0 bg-white rounded-t-[2.5rem] shadow-2xl z-[70] p-8 space-y-6 max-h-[90%] overflow-y-auto no-scrollbar"
+              className="absolute bottom-0 left-0 right-0 md:bottom-auto md:top-1/2 md:left-1/2 md:-translate-x-1/2 md:-translate-y-1/2 md:rounded-[2.5rem] md:w-[480px] bg-white rounded-t-[2.5rem] shadow-2xl z-[70] p-8 space-y-6 max-h-[90%] overflow-y-auto no-scrollbar"
             >
               {paymentStep === 'select' ? (
                 <>
@@ -3119,7 +3192,7 @@ export default function App() {
               animate={{ y: 0 }}
               exit={{ y: '100%' }}
               transition={{ type: 'spring', damping: 25, stiffness: 200 }}
-              className="absolute bottom-0 left-0 right-0 bg-white rounded-t-[2.5rem] shadow-2xl z-50 flex flex-col max-h-[85%]"
+              className="absolute bottom-0 left-0 right-0 md:bottom-auto md:top-1/2 md:left-1/2 md:-translate-x-1/2 md:-translate-y-1/2 md:rounded-[2.5rem] md:w-[480px] bg-white rounded-t-[2.5rem] shadow-2xl z-50 flex flex-col max-h-[85%]"
             >
               <div className="p-6 flex justify-between items-center border-b border-slate-100">
                 <h2 className="text-xl font-black text-slate-900">Current Order</h2>
@@ -3236,7 +3309,7 @@ export default function App() {
               initial={{ y: '100%' }}
               animate={{ y: 0 }}
               exit={{ y: '100%' }}
-              className="absolute bottom-0 left-0 right-0 bg-white rounded-t-[2.5rem] shadow-2xl z-[100] p-8 space-y-6"
+              className="absolute bottom-0 left-0 right-0 md:bottom-auto md:top-1/2 md:left-1/2 md:-translate-x-1/2 md:-translate-y-1/2 md:rounded-[2.5rem] md:w-[480px] bg-white rounded-t-[2.5rem] shadow-2xl z-[100] p-8 space-y-6"
             >
               <div className="text-center">
                 <div className="w-16 h-16 bg-slate-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
@@ -3297,7 +3370,7 @@ export default function App() {
               initial={{ y: '100%' }}
               animate={{ y: 0 }}
               exit={{ y: '100%' }}
-              className="absolute bottom-0 left-0 right-0 bg-white rounded-t-[2.5rem] shadow-2xl z-[100] p-8 space-y-6"
+              className="absolute bottom-0 left-0 right-0 md:bottom-auto md:top-1/2 md:left-1/2 md:-translate-x-1/2 md:-translate-y-1/2 md:rounded-[2.5rem] md:w-[480px] bg-white rounded-t-[2.5rem] shadow-2xl z-[100] p-8 space-y-6"
             >
               <div className="text-center">
                 <h2 className="text-2xl font-black text-slate-900">{editingUser?.id ? 'Edit User' : 'Create User'}</h2>
@@ -3383,7 +3456,7 @@ export default function App() {
               initial={{ y: '100%' }}
               animate={{ y: 0 }}
               exit={{ y: '100%' }}
-              className="absolute bottom-0 left-0 right-0 bg-white rounded-t-[2.5rem] shadow-2xl z-[100] p-8 space-y-6"
+              className="absolute bottom-0 left-0 right-0 md:bottom-auto md:top-1/2 md:left-1/2 md:-translate-x-1/2 md:-translate-y-1/2 md:rounded-[2.5rem] md:w-[480px] bg-white rounded-t-[2.5rem] shadow-2xl z-[100] p-8 space-y-6"
             >
               <div className="text-center">
                 <h2 className="text-2xl font-black text-slate-900">User Profile</h2>
@@ -3448,7 +3521,7 @@ export default function App() {
               initial={{ y: '100%' }}
               animate={{ y: 0 }}
               exit={{ y: '100%' }}
-              className="absolute bottom-0 left-0 right-0 bg-white rounded-t-[2.5rem] shadow-2xl z-[100] p-8 space-y-6"
+              className="absolute bottom-0 left-0 right-0 md:bottom-auto md:top-1/2 md:left-1/2 md:-translate-x-1/2 md:-translate-y-1/2 md:rounded-[2.5rem] md:w-[480px] bg-white rounded-t-[2.5rem] shadow-2xl z-[100] p-8 space-y-6"
             >
               <div className="text-center">
                 <h2 className="text-2xl font-black text-slate-900">{editingProduct?.id ? 'Edit Product' : 'Add Product'}</h2>
